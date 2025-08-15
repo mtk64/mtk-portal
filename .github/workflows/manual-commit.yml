@@ -4,13 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Aktion wählen"
+        description: "Aktion"
         type: choice
         default: init-mvp
-        options:
-          - init-mvp       # minimale Portaldateien anlegen/aktualisieren
-          - redirect-only  # Root-Redirect auf /portal/index.html
-          - promote-zip    # neueste uploads/*.zip -> nach /portal
+        options: [init-mvp, redirect-only, promote-zip]
       commit_message:
         description: "Commit-Message"
         default: "[MANUAL] Commit via Run workflow"
@@ -23,18 +20,22 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+
+    # >>> WICHTIG für Pages-Deploy
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Der integrierte Token reicht zum Pushen
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure base folders
         run: |
           mkdir -p uploads portal assets config .github/workflows
 
-      # --- Aktionen ---
       - name: init-mvp
         if: ${{ github.event.inputs.action == 'init-mvp' }}
         run: |
@@ -97,8 +98,7 @@ jobs:
           <title>MTK‑Portal lädt…</title>
           HTML
 
-      # --- Commit & Push (immer) ---
-      - name: Commit & Push (safe, allow-empty)
+      - name: Commit & Push (allow-empty)
         run: |
           git config user.name "mtk-portal-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -106,12 +106,15 @@ jobs:
           git commit --allow-empty -m "${{ github.event.inputs.commit_message }}"
           git push origin HEAD:${{ github.ref_name }}
 
-      # --- Pages Deploy (einheitlich) ---
+      # ---- Pages Deploy (mit Environment) ----
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./
+
       - name: Deploy to GitHub Pages
+        id: deploy
         uses: actions/deploy-pages@v4
