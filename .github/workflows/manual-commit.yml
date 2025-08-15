@@ -1,10 +1,10 @@
-name: Manual Commit / Deploy (Safe)
+name: Manual Commit + Deploy
 
 on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  commit-and-deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -17,6 +17,16 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Auto Commit Changes
+        run: |
+          git config --global user.name "MTK-AutoCommit"
+          git config --global user.email "mtk-bot@example.com"
+          git add .
+          git commit -m "Automated commit via workflow" || echo "No changes to commit"
+          git push
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -24,7 +34,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "./"  # oder den Ordner, den du wirklich deployen willst
+          path: "./" # ggf. anpassen auf Build-Ordner
 
       - name: Deploy to GitHub Pages
         id: deployment
