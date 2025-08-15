@@ -2,15 +2,6 @@ name: Manual Commit / Deploy (Safe)
 
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: "Aktion"
-        type: choice
-        default: init-mvp
-        options: [init-mvp, redirect-only, promote-zip]
-      commit_message:
-        description: "Commit-Message"
-        default: "[MANUAL] Commit via Run workflow"
 
 permissions:
   contents: write
@@ -18,103 +9,21 @@ permissions:
   id-token: write
 
 jobs:
-  run:
+  deploy:
     runs-on: ubuntu-latest
-
-    # >>> WICHTIG für Pages-Deploy
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
-
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure base folders
-        run: |
-          mkdir -p uploads portal assets config .github/workflows
+      # Falls du einen Build-Schritt hast, kommt der hier hin
+      # - name: Build project
+      #   run: npm install && npm run build
 
-      - name: init-mvp
-        if: ${{ github.event.inputs.action == 'init-mvp' }}
-        run: |
-          cat > index.html <<'HTML'
-          <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>MTK‑Portal</title><link rel="stylesheet" href="assets/style.css">
-          <header><h1>Willkommen im MTK‑Portal</h1>
-          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
-          <main><h2>Quick‑Win MVP</h2><p>Startseite des MTK‑Portals (MVP).</p></main>
-          <footer>Version 0.1 MVP · © MTK</footer></html>
-          HTML
-          cat > process.html <<'HTML'
-          <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>Prozesslandschaft</title><link rel="stylesheet" href="assets/style.css">
-          <header><h1>Prozesslandschaft</h1>
-          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
-          <main><h2>Visuelle Darstellung</h2><p>Interaktive Stages‑Ansicht (Platzhalter).</p></main>
-          <footer>Version 0.1 MVP · © MTK</footer></html>
-          HTML
-          cat > metrics.html <<'HTML'
-          <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>Metriken</title><link rel="stylesheet" href="assets/style.css">
-          <header><h1>Metriken</h1>
-          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
-          <main><h2>CMO‑Status (Demo)</h2><ul><li>Offene Punkte: 3</li><li>Letztes Update: heute</li><li>Status: Grün</li></ul></main>
-          <footer>Version 0.1 MVP · © MTK</footer></html>
-          HTML
-          cat > assets/style.css <<'CSS'
-          body{font-family:Arial,Helvetica,sans-serif;margin:0}
-          header{background:#003366;color:#fff;padding:12px;text-align:center}
-          nav a{color:#fff;margin:0 10px;text-decoration:none}
-          main{padding:20px}
-          footer{background:#f0f0f0;text-align:center;padding:10px;font-size:.85em}
-          CSS
-
-      - name: redirect-only
-        if: ${{ github.event.inputs.action == 'redirect-only' }}
-        run: |
-          cat > index.html <<'HTML'
-          <!doctype html><meta charset="utf-8">
-          <meta http-equiv="refresh" content="0; url=./portal/index.html">
-          <title>MTK‑Portal lädt…</title>
-          <p>Weiter zu <a href="./portal/index.html">MTK‑Portal</a>.</p>
-          HTML
-
-      - name: promote-zip
-        if: ${{ github.event.inputs.action == 'promote-zip' }}
-        run: |
-          set -e
-          sudo apt-get update -y && sudo apt-get install -y unzip rsync
-          LATEST_ZIP=$(ls -t uploads/*.zip | head -n 1)
-          echo "Using ZIP: $LATEST_ZIP"
-          rm -rf portal
-          mkdir -p portal
-          unzip -o "$LATEST_ZIP" -d portal
-          # Root Redirect
-          cat > index.html <<'HTML'
-          <!doctype html><meta charset="utf-8">
-          <meta http-equiv="refresh" content="0; url=./portal/index.html">
-          <title>MTK‑Portal lädt…</title>
-          HTML
-
-      - name: Commit & Push (allow-empty)
-        run: |
-          git config user.name "mtk-portal-bot"
-          git config user.email "bot@users.noreply.github.com"
-          git add -A
-          git commit --allow-empty -m "${{ github.event.inputs.commit_message }}"
-          git push origin HEAD:${{ github.ref_name }}
-
-      # ---- Pages Deploy (mit Environment) ----
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
+      - name: Upload artifact to GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./
+          # Pfad zum fertigen HTML/CSS/JS — anpassen falls nötig
+          path: ./mtk-portal-upload
 
       - name: Deploy to GitHub Pages
-        id: deploy
         uses: actions/deploy-pages@v4
