@@ -3,39 +3,40 @@ name: Manual Commit + Deploy
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
   commit-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Auto Commit Changes
+      # Optional: alles committen, falls du Dateien im Repo geändert/hochgeladen hast
+      - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
           git config --global user.email "mtk-bot@example.com"
-          git add .
+          git add -A
           git commit -m "Automated commit via workflow" || echo "No changes to commit"
-          git push
+          git push || true
 
-      - name: Setup Pages
+      - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload artifact
+      # WICHTIG: Hier liegt dein neues Portal!
+      - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "./" # ggf. anpassen auf Build-Ordner
+          path: ./mtk-portal-upload
 
       - name: Deploy to GitHub Pages
-        id: deployment
+        id: deploy
         uses: actions/deploy-pages@v4
