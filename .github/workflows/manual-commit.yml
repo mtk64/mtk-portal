@@ -3,27 +3,29 @@ name: Manual Commit / Deploy (Safe)
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Falls du einen Build-Schritt hast, kommt der hier hin
-      # - name: Build project
-      #   run: npm install && npm run build
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
-      - name: Upload artifact to GitHub Pages
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Pfad zum fertigen HTML/CSS/JS — anpassen falls nötig
-          path: ./mtk-portal-upload
+          path: "./"  # oder den Ordner, den du wirklich deployen willst
 
       - name: Deploy to GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
