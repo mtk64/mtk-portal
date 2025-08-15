@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Prozess‑Landschaft (MVP)</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    body{margin:0;background:#0b0f17;color:#e8eefc;font-family:Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    header{padding:16px 20px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center}
+    a{color:#8bdaff;text-decoration:none}
+    .wrap{padding:16px 20px}
+    .card{background:#121826;border:1px solid #1f2937;border-radius:12px;padding:16px}
+  </style>
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>
+</head>
+<body>
+<header>
+  <div>🗺️ Prozess‑Landschaft (MVP)</div>
+  <nav><a href="../index.html">← Zurück</a></nav>
+</header>
+
+<div class="wrap">
+  <div class="card">
+<div class="mermaid">
+flowchart LR
+  subgraph Idee[Idee]
+    I1[Vision festhalten]
+    I2[Stakeholder & Ziele]
+  end
+  subgraph Konzept[Konzept]
+    K1[Hosting‑Optionen (günstig)]
+    K2[Portal‑Module]
+    K3[CMMI‑Mapping]
+  end
+  subgraph Umsetzung[Umsetzung (Light)]
+    U1[Portal‑Shell online]
+    U2[Prozess‑Karte publiziert]
+    U3[LZG‑Links integriert]
+  end
+  subgraph Review[Review]
+    R1[SLA & Eskalations‑KPIs sichten]
+    R2[Lessons Learned]
+  end
+  I1 --> K1 --> U1 --> R1
+  I2 --> K2 --> U2 --> R2
+  K3 --> U3
+  click K1 "../docs/providers.html" "Hosting‑Optionen"
+  click U3 "../docs/lzg-links.html" "LZG‑Brücke"
+</div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anbieter & Preise (MVP)</title>
+<style>
+  body{background:#0b0f17;color:#e8eefc;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:20px}
+  table{width:100%;border-collapse:collapse} th,td{padding:10px;border-bottom:1px solid #263042}
+  th{color:#94a3b8;text-align:left}
+  .muted{color:#94a3b8}
+</style></head>
+<body><div class="wrap">
+<h2>Günstig bis kostenlos – empfohlene MVP‑Hosts (statisch)</h2>
+<p class="muted">Für das MVP genügt reines Static Hosting (keine Serverkosten, eigene Domain später möglich).</p>
+<table><thead><tr><th>Host</th><th>Typ</th><th>Kosten</th><th>Eignung</th></tr></thead>
+<tbody>
+<tr><td>GitHub Pages</td><td>Static</td><td>0 €</td><td>✅ Ideal für MVP</td></tr>
+<tr><td>Cloudflare Pages</td><td>Static + CDN</td><td>0 €</td><td>✅ Sehr gut, schnell</td></tr>
+<tr><td>Netlify Free</td><td>Static</td><td>0 €</td><td>✅ Einfaches Deploy</td></tr>
+<tr><td>Vercel Hobby</td><td>Static/Serverless</td><td>0 €</td><td>✅ Für Portale üblich</td></tr>
+<tr><td>Hetzner Cloud CX11 (Test)</td><td>VPS</td><td>~3,79 €</td><td>🟡 Nur falls eigener Server nötig</td></tr>
+</tbody></table>
+<h3>Deploy – GitHub Pages (2 Minuten)</h3>
+<ol>
+  <li>Repo anlegen <code>mtk-portal</code>, Dateien ins Root.</li>
+  <li>Repo → Settings → Pages → Source: <b>Deploy from a branch</b>, Branch <code>main</code>, Folder <code>/ (root)</code>.</li>
+  <li>URL erscheint → fertig.</li>
+</ol>
+</div></body></html>
