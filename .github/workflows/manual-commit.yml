@@ -1,22 +1,18 @@
-name: Manual Commit / Deploy
+name: Manual Commit / Deploy (Safe)
 
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Was soll passieren?"
+        description: "Aktion wählen"
         type: choice
-        required: true
-        default: promote-zip
+        default: init-mvp
         options:
-          - promote-zip        # neueste uploads/*.zip → nach /portal entpacken, Redirect setzen
-          - init-mvp           # minimale Portal-Dateien schreiben (index/process/metrics + CSS)
-          - redirect-only      # nur Root-Redirect auf /portal/index.html schreiben
-          - guideline-v1-1     # CMO_Portal_Structure_Guideline_v1.1.yaml anlegen/aktualisieren
-          - commit-staged      # vorhandene Änderungen einfach committen (falls du schon Dateien editiert hast)
+          - init-mvp       # minimale Portaldateien anlegen/aktualisieren
+          - redirect-only  # Root-Redirect auf /portal/index.html
+          - promote-zip    # neueste uploads/*.zip -> nach /portal
       commit_message:
         description: "Commit-Message"
-        required: false
         default: "[MANUAL] Commit via Run workflow"
 
 permissions:
@@ -30,20 +26,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Der integrierte Token reicht zum Pushen
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure base folders
         run: |
           mkdir -p uploads portal assets config .github/workflows
 
-      - name: init-mvp (optional)
+      # --- Aktionen ---
+      - name: init-mvp
         if: ${{ github.event.inputs.action == 'init-mvp' }}
         run: |
           cat > index.html <<'HTML'
           <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
           <title>MTK‑Portal</title><link rel="stylesheet" href="assets/style.css">
           <header><h1>Willkommen im MTK‑Portal</h1>
-            <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav>
-          </header>
+          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
           <main><h2>Quick‑Win MVP</h2><p>Startseite des MTK‑Portals (MVP).</p></main>
           <footer>Version 0.1 MVP · © MTK</footer></html>
           HTML
@@ -51,8 +50,7 @@ jobs:
           <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
           <title>Prozesslandschaft</title><link rel="stylesheet" href="assets/style.css">
           <header><h1>Prozesslandschaft</h1>
-            <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav>
-          </header>
+          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
           <main><h2>Visuelle Darstellung</h2><p>Interaktive Stages‑Ansicht (Platzhalter).</p></main>
           <footer>Version 0.1 MVP · © MTK</footer></html>
           HTML
@@ -60,8 +58,7 @@ jobs:
           <!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
           <title>Metriken</title><link rel="stylesheet" href="assets/style.css">
           <header><h1>Metriken</h1>
-            <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav>
-          </header>
+          <nav><a href="index.html">Home</a><a href="process.html">Prozesslandschaft</a><a href="metrics.html">Metriken</a></nav></header>
           <main><h2>CMO‑Status (Demo)</h2><ul><li>Offene Punkte: 3</li><li>Letztes Update: heute</li><li>Status: Grün</li></ul></main>
           <footer>Version 0.1 MVP · © MTK</footer></html>
           HTML
@@ -73,7 +70,7 @@ jobs:
           footer{background:#f0f0f0;text-align:center;padding:10px;font-size:.85em}
           CSS
 
-      - name: redirect-only (optional)
+      - name: redirect-only
         if: ${{ github.event.inputs.action == 'redirect-only' }}
         run: |
           cat > index.html <<'HTML'
@@ -83,28 +80,7 @@ jobs:
           <p>Weiter zu <a href="./portal/index.html">MTK‑Portal</a>.</p>
           HTML
 
-      - name: guideline-v1-1 (optional)
-        if: ${{ github.event.inputs.action == 'guideline-v1-1' }}
-        run: |
-          mkdir -p config
-          cat > config/CMO_Portal_Structure_Guideline_v1.1.yaml <<'YAML'
-          owner: CMO
-          status: active
-          structure:
-            root: [index.html, README.md, .github/workflows, portal, uploads, docs, assets, config, archive]
-          naming:
-            zips: mtk-portal-static-<version>.zip
-            latest_alias: mtk-portal-static-latest.zip
-          deployment:
-            source: github-actions
-            redirect_root: /portal/index.html
-          controls:
-            releases: tag-required
-            checksum: sha256-required
-            changelog: required
-          YAML
-
-      - name: promote-zip (optional)
+      - name: promote-zip
         if: ${{ github.event.inputs.action == 'promote-zip' }}
         run: |
           set -e
@@ -114,32 +90,28 @@ jobs:
           rm -rf portal
           mkdir -p portal
           unzip -o "$LATEST_ZIP" -d portal
-          # Root-Redirect, damit / auf /portal/ zeigt
+          # Root Redirect
           cat > index.html <<'HTML'
           <!doctype html><meta charset="utf-8">
           <meta http-equiv="refresh" content="0; url=./portal/index.html">
           <title>MTK‑Portal lädt…</title>
           HTML
 
-      - name: Commit & Push
+      # --- Commit & Push (immer) ---
+      - name: Commit & Push (safe, allow-empty)
         run: |
           git config user.name "mtk-portal-bot"
           git config user.email "bot@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "${{ github.event.inputs.commit_message }}"
-            git push origin HEAD:${{ github.ref_name }}
-          fi
+          git commit --allow-empty -m "${{ github.event.inputs.commit_message }}"
+          git push origin HEAD:${{ github.ref_name }}
 
-      - name: Build & Deploy Pages
+      # --- Pages Deploy (einheitlich) ---
+      - name: Configure Pages
         uses: actions/configure-pages@v5
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./
-
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
