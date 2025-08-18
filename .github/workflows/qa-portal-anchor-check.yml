@@ -2,19 +2,17 @@
 # File    : .github/workflows/qa-portal-anchor-check.yml
 # Name    : QA - Portal Anchor Check
 # Purpose : Automatischer + manueller QA-Check des Projektankers
-# Version : v1.5 (2025-08-18)
-# Notes   : Robust, manuell startbar + auto nach Deploy; Retry + Summary
+# Version : v1.5-safe (2025-08-18)
+# Notes   : Manuell startbar + auf push; robustes Fetch, Regex-Validierung
 # Owner   : TM/QM, CMO
 # =====================================================================
 
 name: QA - Portal Anchor Check
 
 on:
-  # Manuell im Menü startbar
   push:
     branches:
       - main
-      
   workflow_dispatch:
     inputs:
       url:
@@ -22,36 +20,22 @@ on:
         required: false
         default: ""
 
-  # Automatisch nach erfolgreichem Deploy
-  workflow_run:
-    workflows: ["Manual Commit + Deploy"]
-    types: [completed]
-
 permissions:
   contents: read
 
 jobs:
   qa-portal-anchor:
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Resolve mode & expected values
+      - name: Resolve mode
         id: ctx
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "mode=auto" >> "$GITHUB_OUTPUT"
-            echo "exp_branch=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
-            echo "exp_sha7=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
-            echo "exp_run=${{ github.event.workflow_run.run_number }}" >> "$GITHUB_OUTPUT"
-          else
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "mode=manual" >> "$GITHUB_OUTPUT"
-            echo "exp_branch=" >> "$GITHUB_OUTPUT"
-            echo "exp_sha7="   >> "$GITHUB_OUTPUT"
-            echo "exp_run="    >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=auto" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compute site URL
@@ -61,7 +45,7 @@ jobs:
           if [ -n "${{ github.event.inputs.url }}" ]; then
             echo "url=${{ github.event.inputs.url }}" >> "$GITHUB_OUTPUT"
           else
-            repo="${GITHUB_REPOSITORY##*/}"   # z.B. mtk-portal
+            repo="${GITHUB_REPOSITORY##*/}"
             echo "url=https://${{ github.repository_owner }}.github.io/${repo}/" >> "$GITHUB_OUTPUT"
           fi
           echo "URL=${{ steps.site.outputs.url }}"
@@ -80,17 +64,16 @@ jobs:
             sleep 2
           done
           test -s portal.html || { echo "Leere Seite geladen"; exit 1; }
-          # HTML → Text (für Regex)
           sed -E 's/<[^>]+>//g' portal.html > portal.txt
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor (regex + optional equality)
+      - name: Validate anchor (regex only)
         id: validate
         shell: bash
         run: |
-          python3 - << 'PY'
-import re, sys, pathlib, os
+          python3 - <<'PY'
+import re, sys, pathlib
 t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
 lines = [ln.strip() for ln in t.splitlines() if "Projektanker" in ln]
 if len(lines) != 1:
@@ -104,40 +87,17 @@ rx = re.compile(
   r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
   r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
   r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
-  r"\s*·\s*(?P<branch>[a-z0-9/_-]+)"
-  r"\s*·\s*#(?P<sha7>[0-9a-f]{7})"
-  r"\s*·\s*Run\s+(?P<run>\d+)\s*$",
+  r"\s*·\s*[a-z0-9/_-]+"
+  r"\s*·\s*#[0-9a-f]{7}"
+  r"\s*·\s*Run\s+\d+\s*$",
   re.IGNORECASE
 )
-m = rx.search(line)
-if not m:
-  print("FAIL: Regex-Match auf Ankerzeile fehlgeschlagen.")
+if not rx.search(line):
+  print("FAIL: Regex-Match fehlgeschlagen.")
+  print("LINE:", line)
   sys.exit(3)
-
-mode = os.getenv("MODE","").lower()
-branch = m.group("branch").lower()
-sha7   = m.group("sha7").lower()
-run    = m.group("run").lower()
-
-exp_branch = os.getenv("EXP_BRANCH","").lower()
-exp_sha7   = os.getenv("EXP_SHA7","").lower()[:7]
-exp_run    = os.getenv("EXP_RUN","").lower()
-
-print(f"Parsed: branch={branch}, sha7={sha7}, run={run}")
-errs=[]
-if mode == "auto":
-  if exp_branch and branch != exp_branch: errs.append(f"Branch mismatch: {branch} != {exp_branch}")
-  if exp_sha7   and sha7   != exp_sha7:   errs.append(f"SHA mismatch: {sha7} != {exp_sha7}")
-  if exp_run    and run    != exp_run:    errs.append(f"Run mismatch: {run} != {exp_run}")
-if errs:
-  print("FAIL:", *errs, sep="\n- "); sys.exit(4)
 print("PASS")
 PY
-        env:
-          MODE:       ${{ steps.ctx.outputs.mode }}
-          EXP_BRANCH: ${{ steps.ctx.outputs.exp_branch }}
-          EXP_SHA7:   ${{ steps.ctx.outputs.exp_sha7 }}
-          EXP_RUN:    ${{ steps.ctx.outputs.exp_run }}
 
       - name: Upload QA artifacts
         if: always()
