@@ -2,7 +2,7 @@
 # File    : .github/workflows/qa-portal-anchor-check.yml
 # Name    : QA - Portal Anchor Check
 # Purpose : Automatischer + manueller QA-Check des Projektankers
-# Version : v1.5-safe (2025-08-18)
+# Version : v1.6-safe (2025-08-18)
 # Notes   : Manuell startbar + auf push; robustes Fetch, Regex-Validierung
 # Owner   : TM/QM, CMO
 # =====================================================================
@@ -50,7 +50,7 @@ jobs:
           fi
           echo "URL=${{ steps.site.outputs.url }}"
 
-      - name: Fetch portal and extract text   # <— kein Doppelpunkt im Namen!
+      - name: Fetch portal and extract text
         shell: bash
         run: |
           set -e
@@ -73,31 +73,32 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-import re, sys, pathlib
-t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
-lines = [ln.strip() for ln in t.splitlines() if "Projektanker" in ln]
-if len(lines) != 1:
-  print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
-  for l in lines[:5]: print(">>", l)
-  sys.exit(2)
-line = lines[0]
-print("Anchor:", line)
+          import re, sys, pathlib
+          t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
+          lines = [ln.strip() for ln in t.splitlines() if "Projektanker" in ln]
+          if len(lines) != 1:
+              print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
+              for l in lines[:5]:
+                  print(">>", l)
+              sys.exit(2)
+          line = lines[0]
+          print("Anchor:", line)
 
-rx = re.compile(
-  r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
-  r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
-  r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
-  r"\s*·\s*[a-z0-9/_-]+"
-  r"\s*·\s*#[0-9a-f]{7}"
-  r"\s*·\s*Run\s+\d+\s*$",
-  re.IGNORECASE
-)
-if not rx.search(line):
-  print("FAIL: Regex-Match fehlgeschlagen.")
-  print("LINE:", line)
-  sys.exit(3)
-print("PASS")
-PY
+          rx = re.compile(
+              r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
+              r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
+              r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
+              r"\s*·\s*[a-z0-9/_-]+"
+              r"\s*·\s*#[0-9a-f]{7}"
+              r"\s*·\s*Run\s+\d+\s*$",
+              re.IGNORECASE
+          )
+          if not rx.search(line):
+              print("FAIL: Regex-Match fehlgeschlagen.")
+              print("LINE:", line)
+              sys.exit(3)
+          print("PASS")
+          PY
 
       - name: Upload QA artifacts
         if: always()
