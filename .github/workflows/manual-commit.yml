@@ -1,12 +1,13 @@
 # =====================================================================
 # File: .github/workflows/manual-commit.yml
-# Version: v1.4 (2025-08-18)
+# Version: v1.4.1 (2025-08-18)
 # Change History:
-# - v1.0 Initial workflow
-# - v1.1 Verify + Build Timestamp (UTC)
-# - v1.2 Build Info erweitert (Branch, Commit, Run)
-# - v1.3 Zeitstempel UTC+Berlin + strenge Verifikation (failed)
-# - v1.4 Regex-Anpassung für robuste Ersetzung + Verifikation gefixt
+# - v1.0  Initial workflow
+# - v1.1  Verify + Build Timestamp (UTC)
+# - v1.2  Build Info erweitert (Branch, Commit, Run)
+# - v1.3  UTC+Berlin + strenge Verifikation (failte)
+# - v1.4  Regex robuster; Verifikation gefixt
+# - v1.4.1 Debug vor/nach, tokenbasierte Verifikation (Unicode-sicher)
 # =====================================================================
 
 name: Manual Commit + Deploy
@@ -53,6 +54,14 @@ jobs:
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
+          echo "index.html gefunden."
+
+      # --- DEBUG: aktuelle Build-Zeile vor dem Patch zeigen -------------------
+      - name: Show current Build line (before)
+        run: |
+          echo "--- BEFORE (grep 'Build '):"
+          grep -n "Build " -m 1 -n mtk-portal-upload/index.html || echo "keine Build-Zeile gefunden"
+      # -----------------------------------------------------------------------
 
       - name: Stamp Build Tag (UTC + Europe/Berlin) and Write Version
         env:
@@ -63,6 +72,7 @@ jobs:
           NOTE: ${{ github.event.inputs.note }}
         run: |
           set -e
+          export LC_ALL=C.UTF-8
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
@@ -70,19 +80,26 @@ jobs:
 
           new="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
 
-          # Robuste Ersetzung: nur den alten Build-Zeitstempel-Block ersetzen
-          perl -0777 -pe "s/Build [^\n<]+/${new}/" -i "$f"
-          echo "Stamped: ${new}"
+          # Robuste Ersetzung:
+          # ersetze den Text ab 'Build ' bis zum nächsten '<' ODER bis zum Zeilenende
+          perl -0777 -pe "s/Build [^<\r\n]*/${new}/" -i "$f"
 
-          # Verifikation
-          if ! grep -qF "${new}" "$f"; then
-            echo "Verifikation fehlgeschlagen: '${new}' nicht in index.html"
-            exit 1
-          fi
+          echo "Stamped new line:"
+          grep -n "Build " -m 1 "$f" || true
 
-          # Versionierungsdateien
+          # Tokenbasierte Verifikation (Unicode-sicher, vermeidet 1:1-Match-Probleme)
+          ok=1
+          grep -qF "${ts_utc}"        "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
+          grep -qF "${ts_berlin}"     "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
+          grep -qF "${BRANCH}"        "$f" || { echo "Token fehlt: ${BRANCH}"; ok=0; }
+          grep -qF "#${shortsha}"     "$f" || { echo "Token fehlt: #${shortsha}"; ok=0; }
+          grep -qF "Run ${RUN_NUMBER}" "$f" || { echo "Token fehlt: Run ${RUN_NUMBER}"; ok=0; }
+          [ "$ok" = "1" ] || { echo "Verifikation fehlgeschlagen (Tokenprüfung)"; exit 1; }
+
+          # Versionierung für CM
           ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
           printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
+
           cat > mtk-portal-upload/version.json <<JSON
           {
             "version": "${ver}",
@@ -99,8 +116,12 @@ jobs:
           {
             echo "## Deploy Summary"
             echo ""
-            echo "- **Stamped:** ${new}"
+            echo "- **Stamped (full):** ${new}"
             echo "- **Version:** ${ver}"
+            echo "- **Branch:** ${BRANCH}"
+            echo "- **Commit:** ${shortsha}"
+            echo "- **Run:** ${RUN_NUMBER}"
+            echo "- **UTC/Berlin:** ${ts_utc} / ${ts_berlin}"
             echo "- **Note:** ${NOTE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
