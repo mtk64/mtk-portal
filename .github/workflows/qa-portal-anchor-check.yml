@@ -50,7 +50,7 @@ jobs:
           fi
           echo "URL=${{ steps.site.outputs.url }}"
 
-      - name: Fetch portal (no-cache, retry) & extract text
+      - name: Fetch portal and extract text   # <— kein Doppelpunkt im Namen!
         shell: bash
         run: |
           set -e
@@ -68,7 +68,7 @@ jobs:
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor (regex only)
+      - name: Validate anchor with regex
         id: validate
         shell: bash
         run: |
