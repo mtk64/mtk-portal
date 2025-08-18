@@ -1,13 +1,14 @@
 # =====================================================================
 # File: .github/workflows/manual-commit.yml
-# Version: v1.5 (2025-08-18)
+# Version: v1.6 (2025-08-18)
 # Change History:
 # - v1.0  Initial workflow
 # - v1.1  Verify + Build Timestamp (UTC)
 # - v1.2  Build Info erweitert (Branch, Commit, Run)
 # - v1.3  UTC+Berlin + strenge Verifikation (failte)
 # - v1.4  Regex robuster; Verifikation gefixt
-# - v1.5  Perl-frei; sed; Verify als eigener Step (continue-on-error); stabile Logs
+# - v1.5  Perl-frei; sed; Verify separat
+# - v1.6  Fehlertolerant; keine harten Abbrüche; ausführliches Logging
 # =====================================================================
 
 name: Manual Commit + Deploy
@@ -52,19 +53,19 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # Guards
       - name: Verify portal files exist
         run: |
-          test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
+          if [ ! -f mtk-portal-upload/index.html ]; then
+            echo "mtk-portal-upload/index.html fehlt"
+            exit 1
+          fi
           echo "index.html gefunden."
 
-      # Debug vor dem Patch
       - name: Show current Build line (before)
         run: |
           echo "--- BEFORE (erste Zeile mit 'Build '):"
           grep -n "Build " -m 1 mtk-portal-upload/index.html || echo "keine Build-Zeile gefunden"
 
-      # Stempelt: UTC + Europe/Berlin + Branch + Commit + Run (mit sed, perl-frei)
       - name: Stamp Build Tag and Write Version
         id: stamp
         env:
@@ -74,29 +75,24 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           NOTE: ${{ github.event.inputs.note }}
         run: |
-          set -e
+          # kein 'set -e' → wir protokollieren und behandeln selbst
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
           f="mtk-portal-upload/index.html"
-
           new="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
 
-          # Ersetzen ab 'Build ' bis zum nächsten '<' ODER bis zum Zeilenende (sed, POSIX-kompatibel)
-          # 1) Versuch: bis '<'
-          sed -E -i "s/Build [^<\r\n]*/${new}/" "$f"
-          # 2) Falls keine Änderung (z.B. kein '<' in der Zeile) → bis Zeilenende
-          if ! grep -qF "${new}" "$f"; then
-            sed -E -i "s/Build .*/${new}/" "$f"
-          fi
+          # Ersetzung mit sed:
+          sed -E -i "s/Build [^<\r\n]*/${new}/" "$f" 2>/dev/null || true
+          # Falls das nicht gegriffen hat (z.B. kein '<' in der Zeile) → bis Zeilenende
+          grep -qF "${new}" "$f" || sed -E -i "s/Build .*/${new}/" "$f" 2>/dev/null || true
 
-          echo "Stamped new line:"
-          grep -n "Build " -m 1 "$f" || true
+          echo "Stamped new line (AFTER):"
+          grep -n "Build " -m 1 "$f" || echo "Build-Zeile nach Ersetzung nicht gefunden"
 
-          # Versionierung für CM
+          # Versionierung (CM)
           ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
           printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
-
           cat > mtk-portal-upload/version.json <<JSON
           {
             "version": "${ver}",
@@ -122,8 +118,7 @@ jobs:
             echo "- **Note:** ${NOTE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Verifikation als eigener Step (bricht den Job nicht ab, protokolliert aber klar)
-      - name: Verify stamped tokens
+      - name: Verify stamped tokens (non-blocking)
         id: verify
         continue-on-error: true
         env:
@@ -131,16 +126,15 @@ jobs:
           SHA_FULL: ${{ github.sha }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
-          set -e
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
           f="mtk-portal-upload/index.html"
           ok=1
-          grep -qF "${ts_utc}"        "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
-          grep -qF "${ts_berlin}"     "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
-          grep -qF "${BRANCH}"        "$f" || { echo "Token fehlt: ${BRANCH}"; ok=0; }
-          grep -qF "#${shortsha}"     "$f" || { echo "Token fehlt: #${shortsha}"; ok=0; }
+          grep -qF "${ts_utc}"         "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
+          grep -qF "${ts_berlin}"      "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
+          grep -qF "${BRANCH}"         "$f" || { echo "Token fehlt: ${BRANCH}"; ok=0; }
+          grep -qF "#${shortsha}"      "$f" || { echo "Token fehlt: #${shortsha}"; ok=0; }
           grep -qF "Run ${RUN_NUMBER}" "$f" || { echo "Token fehlt: Run ${RUN_NUMBER}"; ok=0; }
           if [ "$ok" = "1" ]; then
             echo "verify_status=ok" >> $GITHUB_OUTPUT
@@ -159,7 +153,6 @@ jobs:
         id: deploy
         uses: actions/deploy-pages@v4
 
-      # Optional: Verify-Status in Summary hervorheben
       - name: Summary — Verify result
         run: |
           echo "### Verify result: ${{ steps.verify.outputs.verify_status || 'n/a' }}" >> "$GITHUB_STEP_SUMMARY"
