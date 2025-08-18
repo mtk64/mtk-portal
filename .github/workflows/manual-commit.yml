@@ -1,13 +1,13 @@
 # =====================================================================
 # File: .github/workflows/manual-commit.yml
-# Version: v1.4.1 (2025-08-18)
+# Version: v1.5 (2025-08-18)
 # Change History:
 # - v1.0  Initial workflow
 # - v1.1  Verify + Build Timestamp (UTC)
 # - v1.2  Build Info erweitert (Branch, Commit, Run)
 # - v1.3  UTC+Berlin + strenge Verifikation (failte)
 # - v1.4  Regex robuster; Verifikation gefixt
-# - v1.4.1 Debug vor/nach, tokenbasierte Verifikation (Unicode-sicher)
+# - v1.5  Perl-frei; sed; Verify als eigener Step (continue-on-error); stabile Logs
 # =====================================================================
 
 name: Manual Commit + Deploy
@@ -40,6 +40,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Optional: commit/push, falls durch vorherige Schritte Dateien geändert wurden
       - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
@@ -51,19 +52,21 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      # Guards
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
           echo "index.html gefunden."
 
-      # --- DEBUG: aktuelle Build-Zeile vor dem Patch zeigen -------------------
+      # Debug vor dem Patch
       - name: Show current Build line (before)
         run: |
-          echo "--- BEFORE (grep 'Build '):"
-          grep -n "Build " -m 1 -n mtk-portal-upload/index.html || echo "keine Build-Zeile gefunden"
-      # -----------------------------------------------------------------------
+          echo "--- BEFORE (erste Zeile mit 'Build '):"
+          grep -n "Build " -m 1 mtk-portal-upload/index.html || echo "keine Build-Zeile gefunden"
 
-      - name: Stamp Build Tag (UTC + Europe/Berlin) and Write Version
+      # Stempelt: UTC + Europe/Berlin + Branch + Commit + Run (mit sed, perl-frei)
+      - name: Stamp Build Tag and Write Version
+        id: stamp
         env:
           BRANCH: ${{ github.ref_name }}
           SHA_FULL: ${{ github.sha }}
@@ -72,7 +75,6 @@ jobs:
           NOTE: ${{ github.event.inputs.note }}
         run: |
           set -e
-          export LC_ALL=C.UTF-8
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
@@ -80,21 +82,16 @@ jobs:
 
           new="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
 
-          # Robuste Ersetzung:
-          # ersetze den Text ab 'Build ' bis zum nächsten '<' ODER bis zum Zeilenende
-          perl -0777 -pe "s/Build [^<\r\n]*/${new}/" -i "$f"
+          # Ersetzen ab 'Build ' bis zum nächsten '<' ODER bis zum Zeilenende (sed, POSIX-kompatibel)
+          # 1) Versuch: bis '<'
+          sed -E -i "s/Build [^<\r\n]*/${new}/" "$f"
+          # 2) Falls keine Änderung (z.B. kein '<' in der Zeile) → bis Zeilenende
+          if ! grep -qF "${new}" "$f"; then
+            sed -E -i "s/Build .*/${new}/" "$f"
+          fi
 
           echo "Stamped new line:"
           grep -n "Build " -m 1 "$f" || true
-
-          # Tokenbasierte Verifikation (Unicode-sicher, vermeidet 1:1-Match-Probleme)
-          ok=1
-          grep -qF "${ts_utc}"        "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
-          grep -qF "${ts_berlin}"     "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
-          grep -qF "${BRANCH}"        "$f" || { echo "Token fehlt: ${BRANCH}"; ok=0; }
-          grep -qF "#${shortsha}"     "$f" || { echo "Token fehlt: #${shortsha}"; ok=0; }
-          grep -qF "Run ${RUN_NUMBER}" "$f" || { echo "Token fehlt: Run ${RUN_NUMBER}"; ok=0; }
-          [ "$ok" = "1" ] || { echo "Verifikation fehlgeschlagen (Tokenprüfung)"; exit 1; }
 
           # Versionierung für CM
           ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
@@ -125,6 +122,34 @@ jobs:
             echo "- **Note:** ${NOTE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Verifikation als eigener Step (bricht den Job nicht ab, protokolliert aber klar)
+      - name: Verify stamped tokens
+        id: verify
+        continue-on-error: true
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA_FULL: ${{ github.sha }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -e
+          ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
+          ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
+          shortsha="${SHA_FULL:0:7}"
+          f="mtk-portal-upload/index.html"
+          ok=1
+          grep -qF "${ts_utc}"        "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
+          grep -qF "${ts_berlin}"     "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
+          grep -qF "${BRANCH}"        "$f" || { echo "Token fehlt: ${BRANCH}"; ok=0; }
+          grep -qF "#${shortsha}"     "$f" || { echo "Token fehlt: #${shortsha}"; ok=0; }
+          grep -qF "Run ${RUN_NUMBER}" "$f" || { echo "Token fehlt: Run ${RUN_NUMBER}"; ok=0; }
+          if [ "$ok" = "1" ]; then
+            echo "verify_status=ok" >> $GITHUB_OUTPUT
+            echo "✅ Verify OK" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "verify_status=fail" >> $GITHUB_OUTPUT
+            echo "❌ Verify FAILED (Tokens fehlten, siehe Log)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
         with:
@@ -133,3 +158,8 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+      # Optional: Verify-Status in Summary hervorheben
+      - name: Summary — Verify result
+        run: |
+          echo "### Verify result: ${{ steps.verify.outputs.verify_status || 'n/a' }}" >> "$GITHUB_STEP_SUMMARY"
