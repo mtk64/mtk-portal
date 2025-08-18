@@ -1,24 +1,38 @@
 # =====================================================================
-# File: .github/workflows/qa-portal-anchor.yml
-# Purpose : Automatischer + manueller QA-Check des Portal-Projektankers
-# Version : v1.1 (2025-08-18)
-# Triggers: (1) workflow_run nach erfolgreichem Deploy
-#           (2) workflow_dispatch (manuell im UI startbar)
+# File    : .github/workflows/qa-portal-anchor.yml
+# Name    : QA - Portal Anchor Check
+# Purpose : Automatischer + manueller QA-Check des Projektankers
+# Version : v1.3 (2025-08-18)
+# History : v1.2 Hybrid-Trigger; v1.3 Inputs+Retry+Outputs+klarer Summary
 # Owner   : TM/QM, CMO
 # =====================================================================
 
-name: QA — Portal Anchor Check
+name: QA - Portal Anchor Check
 
 on:
-  workflow_run:
-    workflows: ["Manual Commit + Deploy"]
-    types: [completed]
+  # Manuell im Menü startbar
   workflow_dispatch:
     inputs:
       url:
-        description: "Portal-URL (optional; default wird berechnet)"
+        description: "Portal-URL (leer = automatisch)"
         required: false
         default: ""
+      expect_branch:
+        description: "Erwarteter Branch (optional bei manuell)"
+        required: false
+        default: ""
+      expect_sha7:
+        description: "Erwartete Commit-Kurz-SHA (7) (optional bei manuell)"
+        required: false
+        default: ""
+      expect_run:
+        description: "Erwartete Run-Nummer (optional bei manuell)"
+        required: false
+        default: ""
+  # Automatisch nach Deploy
+  workflow_run:
+    workflows: ["Manual Commit + Deploy"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -26,10 +40,12 @@ permissions:
 jobs:
   qa-portal-anchor:
     runs-on: ubuntu-latest
-    # Automatisch nur prüfen, wenn Deploy success; bei manuellem Start immer laufen
-    if: >
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
-      || github.event_name == 'workflow_dispatch'
+    if: |
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch')
+
+    outputs:
+      result: ${{ steps.conclusion.outputs.result }}
 
     steps:
       - name: Resolve context (deploy or manual)
@@ -38,16 +54,13 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_run" ]; then
             echo "mode=auto" >> $GITHUB_OUTPUT
             echo "branch=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-            echo "sha7=${{ github.event.workflow_run.head_sha }}" | cut -c1-14 | awk '{print substr($0,1,7)}' >> /tmp/sha7.txt
-            echo "sha7=$(cat /tmp/sha7.txt)" >> $GITHUB_OUTPUT
+            echo "sha7=${{ github.event.workflow_run.head_sha }}" >> $GITHUB_OUTPUT
             echo "run=${{ github.event.workflow_run.run_number }}" >> $GITHUB_OUTPUT
           else
             echo "mode=manual" >> $GITHUB_OUTPUT
-            # Bei manuellem QA-Start kennen wir den letzten Deploy-Run nicht sicher → Feldgleichheit wird übersprungen
-            echo "branch=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-            echo "sha7=${{ github.sha }}" | cut -c1-14 | awk '{print substr($0,1,7)}' >> /tmp/sha7.txt
-            echo "sha7=$(cat /tmp/sha7.txt)" >> $GITHUB_OUTPUT
-            echo "run=n/a" >> $GITHUB_OUTPUT
+            echo "branch=${{ github.event.inputs.expect_branch }}" >> $GITHUB_OUTPUT
+            echo "sha7=${{ github.event.inputs.expect_sha7 }}" >> $GITHUB_OUTPUT
+            echo "run=${{ github.event.inputs.expect_run }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Compute site URL
@@ -59,16 +72,24 @@ jobs:
             echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
           fi
 
-      - name: Fetch portal HTML (no-cache) & make text view
+      - name: Fetch portal HTML (cache-busting + retry) & text view
+        id: fetch
         run: |
-          echo "Fetching: ${{ steps.site.outputs.url }}"
-          curl -sSL -H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache' "${{ steps.site.outputs.url }}" -o portal.html
+          set -e
+          URL="${{ steps.site.outputs.url }}"
+          TS=$(date +%s)
+          for i in 1 2 3; do
+            echo "Fetch attempt $i ..."
+            curl -sS -m 10 -H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache' \
+                 "${URL}?nocache=${TS}${i}" -o portal.html && break
+            sleep 2
+          done
           test -s portal.html || { echo "Leere Seite geladen"; exit 1; }
           sed -E 's/<[^>]+>//g' portal.html > portal.txt
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor (regex + optional field equality)
+      - name: Validate anchor (regex + optional equality)
         id: validate
         run: |
           python3 - << 'PY'
@@ -77,19 +98,18 @@ txt = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
 lines = [ln.strip() for ln in txt.splitlines() if "Projektanker" in ln]
 if len(lines) != 1:
     print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
-    for l in lines: print(">>", l)
+    for l in lines[:5]: print(">>", l)
     sys.exit(2)
 line = lines[0]
 print("Anchor:", line)
 
-# Regex: PRJ-.... · Build YYYY-MM-DD HH:MMZ / YYYY-MM-DD HH:MM Europe/Berlin · <branch> · #<sha7> · Run <n>
 rx = re.compile(
     r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
     r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
     r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
     r"\s*·\s*(?P<branch>[a-z0-9/_-]+)"
     r"\s*·\s*#(?P<sha7>[0-9a-f]{7})"
-    r"\s*·\s*Run\s+(?P<run>\d+)",
+    r"\s*·\s*Run\s+(?P<run>\d+)\s*$",
     re.IGNORECASE
 )
 m = rx.search(line)
@@ -97,24 +117,23 @@ if not m:
     print("FAIL: Regex-Match auf Ankerzeile fehlgeschlagen.")
     sys.exit(3)
 
-mode = os.getenv("MODE", "").lower()
-branch = m.group("branch")
+mode = os.getenv("MODE","").lower()
+branch = m.group("branch").lower()
 sha7   = m.group("sha7").lower()
-run    = m.group("run")
+run    = m.group("run").lower()
 
 exp_branch = os.getenv("EXP_BRANCH","").lower()
-exp_sha7   = os.getenv("EXP_SHA7","").lower()
+exp_sha7   = os.getenv("EXP_SHA7","").lower()[:7]
 exp_run    = os.getenv("EXP_RUN","").lower()
 
 print(f"Parsed: branch={branch}, sha7={sha7}, run={run}")
 if mode == "auto":
-    errors = []
-    if branch != exp_branch: errors.append(f"Branch mismatch: {branch} != {exp_branch}")
-    if sha7 != exp_sha7:     errors.append(f"SHA mismatch: {sha7} != {exp_sha7}")
-    if run != exp_run:       errors.append(f"Run mismatch: {run} != {exp_run}")
-    if errors:
-        print("FAIL: Feldgleichheit:", *errors, sep="\n- ")
-        sys.exit(4)
+    errs=[]
+    if exp_branch and branch != exp_branch: errs.append(f"Branch mismatch: {branch} != {exp_branch}")
+    if exp_sha7   and sha7   != exp_sha7:   errs.append(f"SHA mismatch: {sha7} != {exp_sha7}")
+    if exp_run    and run    != exp_run:    errs.append(f"Run mismatch: {run} != {exp_run}")
+    if errs:
+        print("FAIL:", *errs, sep="\n- "); sys.exit(4)
 print("PASS")
 PY
         env:
@@ -132,10 +151,21 @@ PY
             portal.html
             portal.txt
 
+      - name: Conclusion
+        id: conclusion
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "result=PASS" >> $GITHUB_OUTPUT
+          else
+            echo "result=FAIL" >> $GITHUB_OUTPUT
+          fi
+
       - name: Summary
         if: always()
         run: |
-          echo "## QA — Portal Anchor" >> "$GITHUB_STEP_SUMMARY"
+          echo "## QA - Portal Anchor" >> "$GITHUB_STEP_SUMMARY"
           echo "- Mode: ${{ steps.ctx.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- URL : ${{ steps.site.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Expect (auto only): branch=${{ steps.ctx.outputs.branch }}, sha7=${{ steps.ctx.outputs.sha7 }}, run=${{ steps.ctx.outputs.run }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Expect (auto/manual): branch='${{ steps.ctx.outputs.branch }}', sha7='${{ steps.ctx.outputs.sha7 }}', run='${{ steps.ctx.outputs.run }}'" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Result: **${{ steps.conclusion.outputs.result }}**" >> "$GITHUB_STEP_SUMMARY"
