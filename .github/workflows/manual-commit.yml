@@ -31,20 +31,20 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # WICHTIG: Hier liegt dein neues Portal!
-      # eingefügt 18.08.2025 Iteration 1.1 
-      
+      # Sicherstellen, dass index.html existiert
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
 
-      - name: Stamp Build Tag (UTC)
+      - name: Stamp Build Tag (UTC + Commit + Run)
         run: |
           ts="$(date -u '+%Y-%m-%d %H:%M')"
+          sha="$(git rev-parse --short HEAD)"
+          run_id="${{ github.run_number }}"
           f="mtk-portal-upload/index.html"
           # ersetzt den Zeitstempel hinter 'Build ' – belässt sonst alles unverändert
-          perl -0777 -pe "s/(Build\s+)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/\1${ts}/" -i "$f"
-          echo "Stamped Build ${ts}"
+          perl -0777 -pe "s/(Build\s+)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}.*/\1${ts} · #${sha} · Run ${run_id}/" -i "$f"
+          echo "Stamped Build ${ts} · #${sha} · Run ${run_id}"
 
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
