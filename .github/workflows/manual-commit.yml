@@ -1,21 +1,31 @@
 # =====================================================================
 # File: .github/workflows/manual-commit.yml
-# Version: v1.2 (2025-08-18)
+# Version: v1.3 (2025-08-18)
 # Change History:
-# - v1.0 (2025-08-18 10:20) Initial workflow erstellt
-# - v1.1 (2025-08-18 10:45) Verify + Build Timestamp eingefügt
-# - v1.2 (2025-08-18 12:40) Build Info erweitert: Branch, Commit, Run-ID
+# - v1.0 (2025-08-18 10:20) Initial workflow
+# - v1.1 (2025-08-18 10:45) Verify + Build Timestamp (UTC)
+# - v1.2 (2025-08-18 12:40) Build Info erweitert (Branch, Commit, Run)
+# - v1.3 (2025-08-18 13:10) Zeitstempel: UTC **und** Europe/Berlin + Verifikations-Grep
 # =====================================================================
 
 name: Manual Commit + Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      note:
+        description: "Kurznotiz fürs Protokoll"
+        required: false
+        default: "Manual deploy"
 
 permissions:
   contents: write
   pages: write
   id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   commit-and-deploy:
@@ -28,7 +38,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: alles committen, falls du Dateien im Repo geändert/hochgeladen hast
       - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
@@ -40,24 +49,57 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # WICHTIG: Hier liegt dein neues Portal!
-      # eingefügt 18.08.2025 Iteration 1.1
-      
+      # Guard: ohne index.html kein Deploy
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
 
-      - name: Stamp Build Tag (UTC, full info)
+      # Stempelt: UTC **und** Europe/Berlin + Branch + Commit + Run
+      # Verifiziert die gestempelte Zeile via grep (fail-fast bei Abweichung)
+      - name: Stamp Build Tag (UTC + Europe/Berlin) and Write Version
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA_FULL: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          NOTE: ${{ github.event.inputs.note }}
         run: |
-          ts="$(date -u '+%Y-%m-%d %H:%M')"
-          branch="${{ github.ref_name }}"
-          sha="${{ github.sha }}"
-          shortsha="${sha:0:7}"
-          runid="${{ github.run_number }}"
+          set -e
+          ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
+          ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
+          shortsha="${SHA_FULL:0:7}"
           f="mtk-portal-upload/index.html"
-          new="Build ${ts} · ${branch} · #${shortsha} · Run ${runid}"
+
+          new="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
           perl -0777 -pe "s/Build.*?(?=<)/${new}/" -i "$f"
           echo "Stamped: ${new}"
+
+          # Verifikation im Artefakt (Pflicht): die Build-Zeile MUSS exakt so enthalten sein
+          grep -nF "${new}" "$f" >/dev/null || { echo "Verifikation fehlgeschlagen: Build-Zeile nicht exakt im index.html"; exit 1; }
+
+          # Versionierung für CM
+          ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
+          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
+          cat > mtk-portal-upload/version.json <<JSON
+          {
+            "version": "${ver}",
+            "time_utc": "$(date -u '+%Y-%m-%dT%H:%M:00Z')",
+            "time_europe_berlin": "${ts_berlin}",
+            "branch": "${BRANCH}",
+            "commit": "${shortsha}",
+            "run_id": "${RUN_ID}",
+            "run_number": ${RUN_NUMBER},
+            "note": "${NOTE}"
+          }
+          JSON
+
+          {
+            echo "## Deploy Summary"
+            echo ""
+            echo "- **Stamped:** ${new}"
+            echo "- **Version:** ${ver}"
+            echo "- **Note:** ${NOTE}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
