@@ -1,0 +1,127 @@
+# =====================================================================
+# File: .github/workflows/qa-portal-anchor.yml
+# Purpose : Automatischer QA-Check des Projektankers nach jedem Deploy
+# Version : v1.0 (2025-08-18)
+# Triggers : workflow_run (nur wenn "Manual Commit + Deploy" erfolgreich war)
+# Owner   : TM/QM, CMO
+# =====================================================================
+
+name: QA — Portal Anchor Check
+
+on:
+  workflow_run:
+    workflows: ["Manual Commit + Deploy"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  qa-portal-anchor:
+    # nur prüfen, wenn der auslösende Deploy erfolgreich war
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set context (deploy info)
+        id: ctx
+        env:
+          DEPLOY_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+          DEPLOY_RUN: ${{ github.event.workflow_run.run_number }}
+        run: |
+          echo "branch=${DEPLOY_BRANCH}" >> $GITHUB_OUTPUT
+          echo "sha_short=${DEPLOY_SHA:0:7}" >> $GITHUB_OUTPUT
+          echo "deploy_run=${DEPLOY_RUN}" >> $GITHUB_OUTPUT
+
+      - name: Compute site URL
+        id: site
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          echo "url=https://${OWNER}.github.io/${REPO}/" >> $GITHUB_OUTPUT
+
+      - name: Fetch portal HTML (no-cache)
+        id: fetch
+        env:
+          URL: ${{ steps.site.outputs.url }}
+        run: |
+          echo "Fetching: $URL"
+          curl -sSL -H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache' "$URL" -o portal.html
+          test -s portal.html || { echo "Leere Seite geladen"; exit 1; }
+          # einfache Textsicht (Tags raus)
+          sed -E 's/<[^>]+>//g' portal.html > portal.txt
+          # nur die Zeilen mit 'Projektanker' (sollte 1x sein)
+          grep -n "Projektanker" portal.txt > anchor_lines.txt || true
+          cat anchor_lines.txt || true
+
+      - name: Validate anchor format (regex + fields)
+        id: validate
+        env:
+          EXPECT_BRANCH: ${{ steps.ctx.outputs.branch }}
+          EXPECT_SHA7: ${{ steps.ctx.outputs.sha_short }}
+          EXPECT_RUN: ${{ steps.ctx.outputs.deploy_run }}
+        run: |
+          echo "Expect: branch=${EXPECT_BRANCH}, sha7=${EXPECT_SHA7}, run=${EXPECT_RUN}"
+          python3 - << 'PY'
+import re, sys, json, pathlib
+t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
+lines = [ln for ln in t.splitlines() if "Projektanker" in ln]
+if len(lines) != 1:
+    print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden: {len(lines)}")
+    print("\n".join(lines[:5]))
+    sys.exit(2)
+
+line = lines[0].strip()
+print("Anchor:", line)
+
+# Regex: PRJ-.... · Build YYYY-MM-DD HH:MMZ / YYYY-MM-DD HH:MM Europe/Berlin · <branch> · #<sha7> · Run <n>
+rx = re.compile(
+    r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
+    r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
+    r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
+    r"\s*·\s*(?P<branch>[a-z0-9/_-]+)"
+    r"\s*·\s*#(?P<sha7>[0-9a-f]{7})"
+    r"\s*·\s*Run\s+(?P<run>\d+)\s*$",
+    re.IGNORECASE
+)
+m = rx.search(line)
+if not m:
+    print("FAIL: Regex-Match auf Ankerzeile fehlgeschlagen.")
+    sys.exit(3)
+
+branch = m.group("branch")
+sha7   = m.group("sha7")
+run    = m.group("run")
+
+# Erwartete Werte aus Deploy-Run (workflow_run-Kontext)
+exp_branch = "${EXPECT_BRANCH}"
+exp_sha7   = "${EXPECT_SHA7}"
+exp_run    = "${EXPECT_RUN}"
+
+errors = []
+if branch != exp_branch:
+    errors.append(f"Branch mismatch: '{branch}' != '{exp_branch}'")
+if sha7.lower() != exp_sha7.lower():
+    errors.append(f"SHA mismatch: '{sha7}' != '{exp_sha7}'")
+if run != exp_run:
+    errors.append(f"Run mismatch: '{run}' != '{exp_run}'")
+
+if errors:
+    print("FAIL: Feldgleichheit:", *errors, sep="\n- ")
+    sys.exit(4)
+
+print("PASS: Anchor-Format und Felder sind konsistent.")
+PY
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-portal-anchor-assets
+          path: |
+            portal.html
+            portal.txt
+            anchor_lines.txt
+
