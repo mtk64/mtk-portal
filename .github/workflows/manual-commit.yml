@@ -21,7 +21,7 @@ jobs:
 
       # Optional: alles committen, falls du Dateien im Repo geändert/hochgeladen hast
       - name: Auto-commit (optional)
-        run: |
+        run:
           git config --global user.name "MTK-AutoCommit"
           git config --global user.email "mtk-bot@example.com"
           git add -A
@@ -32,6 +32,18 @@ jobs:
         uses: actions/configure-pages@v5
 
       # WICHTIG: Hier liegt dein neues Portal!
+      - name: Verify portal files exist
+        run:
+          test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
+
+      - name: Stamp Build Tag (UTC)
+        run:
+          ts="$(date -u '+%Y-%m-%d %H:%M')"
+          f="mtk-portal-upload/index.html"
+          # ersetzt den Zeitstempel hinter 'Build ' – belässt sonst alles unverändert
+          perl -0777 -pe "s/(Build\\s+)\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}/\\1${ts}/" -i "$f"
+          echo "Stamped Build ${ts}"
+
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
         with:
