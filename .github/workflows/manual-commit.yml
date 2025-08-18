@@ -1,21 +1,21 @@
+# =====================================================================
+# File: .github/workflows/manual-commit.yml
+# Version: v1.2 (2025-08-18)
+# Change History:
+# - v1.0 (2025-08-18 10:20) Initial workflow erstellt
+# - v1.1 (2025-08-18 10:45) Verify + Build Timestamp eingefügt
+# - v1.2 (2025-08-18 12:40) Build Info erweitert: Branch, Commit, Run-ID
+# =====================================================================
+
 name: Manual Commit + Deploy
 
 on:
   workflow_dispatch:
-    inputs:
-      note:
-        description: "Kurznotiz fürs Protokoll"
-        required: false
-        default: "Manual deploy"
 
 permissions:
-  contents: write      # für optionalen Auto-Commit
+  contents: write
   pages: write
   id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
 
 jobs:
   commit-and-deploy:
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: commit/push, falls durch vorherige Schritte Dateien geändert wurden
+      # Optional: alles committen, falls du Dateien im Repo geändert/hochgeladen hast
       - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
@@ -40,60 +40,24 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # --- CM Guardrails ------------------------------------------------------
+      # WICHTIG: Hier liegt dein neues Portal!
+      # eingefügt 18.08.2025 Iteration 1.1
+      
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
-      # -----------------------------------------------------------------------
 
-      # Stempelt Build-Tag in index.html (UTC) + ergänzt Branch, Commit, Run
-      # und erzeugt Versionierungs-Artefakte (VERSION, version.json) gemäß CM-Policy
-      - name: Stamp Build Tag and Write Version (UTC)
-        env:
-          BRANCH: ${{ github.ref_name }}
-          SHA_SHORT: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_NUMBER: ${{ github.run_number }}
-          NOTE: ${{ github.event.inputs.note }}
+      - name: Stamp Build Tag (UTC, full info)
         run: |
-          set -e
           ts="$(date -u '+%Y-%m-%d %H:%M')"
-          sha="$(git rev-parse --short "$SHA_SHORT")"
+          branch="${{ github.ref_name }}"
+          sha="${{ github.sha }}"
+          shortsha="${sha:0:7}"
+          runid="${{ github.run_number }}"
           f="mtk-portal-upload/index.html"
-
-          # 1) Build-Tag in der HTML-Datei ersetzen (alles hinter 'Build ' neu schreiben)
-          perl -0777 -pe "s/(Build\s+)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}.*$/\1${ts} · ${BRANCH} · #${sha} · Run ${RUN_NUMBER}/" -i "$f"
-          echo "Stamped: Build ${ts} · ${BRANCH} · #${sha} · Run ${RUN_NUMBER}"
-
-          # 2) Version ableiten (YYYY.MM.DD-RUN) – einfache, nachvollziehbare CM-Policy
-          ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
-
-          # 3) Versionierungsdateien ins Upload-Artefakt schreiben
-          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
-
-          cat > mtk-portal-upload/version.json <<JSON
-          {
-            "version": "${ver}",
-            "time_utc": "${ts}:00",
-            "branch": "${BRANCH}",
-            "commit": "${sha}",
-            "run_id": "${RUN_ID}",
-            "run_number": ${RUN_NUMBER},
-            "note": "${NOTE}"
-          }
-          JSON
-
-          # 4) Kurz-Report in den Run-Summary schreiben (für Audits)
-          {
-            echo "## Deploy Summary"
-            echo ""
-            echo "- **Version:** ${ver}"
-            echo "- **Time (UTC):** ${ts}"
-            echo "- **Branch:** ${BRANCH}"
-            echo "- **Commit:** ${sha}"
-            echo "- **Run:** ${RUN_NUMBER}"
-            echo "- **Note:** ${NOTE}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          new="Build ${ts} · ${branch} · #${shortsha} · Run ${runid}"
+          perl -0777 -pe "s/Build.*?(?=<)/${new}/" -i "$f"
+          echo "Stamped: ${new}"
 
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
