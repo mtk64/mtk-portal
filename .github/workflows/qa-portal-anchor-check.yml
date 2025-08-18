@@ -11,6 +11,10 @@ name: QA - Portal Anchor Check
 
 on:
   # Manuell im Menü startbar
+  push:
+    branches:
+      - main
+      
   workflow_dispatch:
     inputs:
       url:
