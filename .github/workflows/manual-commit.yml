@@ -1,14 +1,15 @@
 # =====================================================================
 # File: .github/workflows/manual-commit.yml
-# Version: v1.6 (2025-08-18)
+# Version: v1.7 (2025-08-18)
 # Change History:
 # - v1.0  Initial workflow
 # - v1.1  Verify + Build Timestamp (UTC)
 # - v1.2  Build Info erweitert (Branch, Commit, Run)
-# - v1.3  UTC+Berlin + strenge Verifikation (failte)
-# - v1.4  Regex robuster; Verifikation gefixt
+# - v1.3  UTC+Berlin + strenge Verifikation
+# - v1.4  Regex robuster
 # - v1.5  Perl-frei; sed; Verify separat
-# - v1.6  Fehlertolerant; keine harten Abbrüche; ausführliches Logging
+# - v1.6  Fehlertolerant; ausführliches Logging
+# - v1.7  Robuste Datei-Erkennung + Ersetzen ODER Einfügen; stabile Verify
 # =====================================================================
 
 name: Manual Commit + Deploy
@@ -41,7 +42,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: commit/push, falls durch vorherige Schritte Dateien geändert wurden
       - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
@@ -53,19 +53,32 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Verify portal files exist
+      # ---- Datei-Erkennung ---------------------------------------------------
+      - name: Locate portal index.html
+        id: locate
         run: |
-          if [ ! -f mtk-portal-upload/index.html ]; then
-            echo "mtk-portal-upload/index.html fehlt"
+          set -e
+          cand1="mtk-portal-upload/index.html"
+          cand2="index.html"
+          if [ -f "$cand1" ]; then
+            echo "file=$cand1" >> $GITHUB_OUTPUT
+            echo "Using $cand1"
+          elif [ -f "$cand2" ]; then
+            echo "file=$cand2" >> $GITHUB_OUTPUT
+            echo "Using $cand2"
+          else
+            echo "Kein index.html gefunden (mtk-portal-upload/ oder Repo-Root)."
             exit 1
           fi
-          echo "index.html gefunden."
 
       - name: Show current Build line (before)
         run: |
+          f="${{ steps.locate.outputs.file }}"
+          echo "FILE: $f"
           echo "--- BEFORE (erste Zeile mit 'Build '):"
-          grep -n "Build " -m 1 mtk-portal-upload/index.html || echo "keine Build-Zeile gefunden"
+          grep -n "Build " -m 1 "$f" || echo "keine Build-Zeile gefunden"
 
+      # ---- Stempel + Versionierung ------------------------------------------
       - name: Stamp Build Tag and Write Version
         id: stamp
         env:
@@ -76,23 +89,38 @@ jobs:
           NOTE: ${{ github.event.inputs.note }}
         run: |
           # kein 'set -e' → wir protokollieren und behandeln selbst
+          f="${{ steps.locate.outputs.file }}"
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
-          f="mtk-portal-upload/index.html"
           new="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
 
-          # Ersetzung mit sed:
-          sed -E -i "s/Build [^<\r\n]*/${new}/" "$f" 2>/dev/null || true
-          # Falls das nicht gegriffen hat (z.B. kein '<' in der Zeile) → bis Zeilenende
-          grep -qF "${new}" "$f" || sed -E -i "s/Build .*/${new}/" "$f" 2>/dev/null || true
+          changed=0
+          # 1) Falls eine Build-Zeile existiert → ersetze nur den Teil ab "Build "
+          if grep -q "Build " "$f"; then
+            sed -E -i "s/Build [^<\r\n]*/${new}/" "$f" 2>/dev/null || true
+            grep -qF "${new}" "$f" && changed=1
+          fi
+
+          # 2) Falls keine Build-Zeile erkannt wurde → vor </p> in der 'muted'-Zeile einfügen
+          if [ "$changed" -eq 0 ]; then
+            # Ziel ist exakt die Zeile mit <p class="muted"> ... </p>
+            # Wir hängen ' · ${new}' vor dem abschließenden </p> an (nur erste Übereinstimmung).
+            awk -v ins=" · ${new}" '
+              BEGIN{done=0}
+              /<p[[:space:]]+class="muted">/ && done==0 {
+                sub(/<\/p>/, ins"</p>", $0); done=1
+              }
+              {print}
+            ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          fi
 
           echo "Stamped new line (AFTER):"
-          grep -n "Build " -m 1 "$f" || echo "Build-Zeile nach Ersetzung nicht gefunden"
+          grep -n "Build " -m 1 "$f" || echo "Build-Zeile nach Ersetzung/Einfügen nicht gefunden"
 
-          # Versionierung (CM)
+          # CM-Versionierung
           ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
-          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
+          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION || true
           cat > mtk-portal-upload/version.json <<JSON
           {
             "version": "${ver}",
@@ -118,6 +146,7 @@ jobs:
             echo "- **Note:** ${NOTE}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # ---- Verify (nicht-blockierend) ----------------------------------------
       - name: Verify stamped tokens (non-blocking)
         id: verify
         continue-on-error: true
@@ -126,10 +155,10 @@ jobs:
           SHA_FULL: ${{ github.sha }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
+          f="${{ steps.locate.outputs.file }}"
           ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
           ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
           shortsha="${SHA_FULL:0:7}"
-          f="mtk-portal-upload/index.html"
           ok=1
           grep -qF "${ts_utc}"         "$f" || { echo "Token fehlt: ${ts_utc}"; ok=0; }
           grep -qF "${ts_berlin}"      "$f" || { echo "Token fehlt: ${ts_berlin}"; ok=0; }
