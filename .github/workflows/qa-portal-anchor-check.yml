@@ -1,35 +1,25 @@
 # =====================================================================
-# File    : .github/workflows/qa-portal-anchor.yml
+# File    : .github/workflows/qa-portal-anchor-check.yml
 # Name    : QA - Portal Anchor Check
-# Purpose : Minimal stabile QA-Version (sichtbar + startbar)
-# Version : v1.4-safe (2025-08-18)
-# Notes   : Erst sicher laden/starten, dann Features wieder anheben
+# Version : v1.4-safe-min
 # =====================================================================
 
 name: QA - Portal Anchor Check
 
 on:
-  # Manuell im UI startbar
   workflow_dispatch:
     inputs:
       url:
         description: "Portal-URL (leer = automatisch)"
         required: false
         default: ""
-  # Automatisch nach Deploy
-  workflow_run:
-    workflows: ["Manual Commit + Deploy"]
-    types: [completed]
 
 permissions:
   contents: read
 
 jobs:
   qa:
-    # bei workflow_run nur laufen, wenn Deploy success
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-
     steps:
       - name: Compute site URL
         id: site
@@ -37,7 +27,8 @@ jobs:
           if [ -n "${{ github.event.inputs.url }}" ]; then
             echo "url=${{ github.event.inputs.url }}" >> $GITHUB_OUTPUT
           else
-            echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
+            echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository }}"/ | sed 's#.*/##' > repo.txt
+            echo "url=https://${{ github.repository_owner }}.github.io/$(cat repo.txt)/" >> $GITHUB_OUTPUT
           fi
           echo "URL=${{ steps.site.outputs.url }}"
 
@@ -50,7 +41,7 @@ jobs:
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor format (regex only)
+      - name: Validate anchor (regex only)
         run: |
           python3 - << 'PY'
 import re, sys, pathlib
@@ -76,9 +67,3 @@ if not rx.search(line):
   sys.exit(3)
 print("PASS")
 PY
-
-      - name: Summary
-        if: always()
-        run: |
-          echo "## QA - Portal Anchor (safe)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- URL: ${{ steps.site.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
