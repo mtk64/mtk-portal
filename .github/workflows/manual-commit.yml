@@ -2,11 +2,20 @@ name: Manual Commit + Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      note:
+        description: "Kurznotiz fürs Protokoll"
+        required: false
+        default: "Manual deploy"
 
 permissions:
-  contents: write
+  contents: write      # für optionalen Auto-Commit
   pages: write
   id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   commit-and-deploy:
@@ -19,7 +28,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optional: alles committen, falls du Dateien im Repo geändert/hochgeladen hast
+      # Optional: commit/push, falls durch vorherige Schritte Dateien geändert wurden
       - name: Auto-commit (optional)
         run: |
           git config --global user.name "MTK-AutoCommit"
@@ -31,20 +40,60 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # Sicherstellen, dass index.html existiert
+      # --- CM Guardrails ------------------------------------------------------
       - name: Verify portal files exist
         run: |
           test -f mtk-portal-upload/index.html || { echo "mtk-portal-upload/index.html fehlt"; exit 1; }
+      # -----------------------------------------------------------------------
 
-      - name: Stamp Build Tag (UTC + Commit + Run)
+      # Stempelt Build-Tag in index.html (UTC) + ergänzt Branch, Commit, Run
+      # und erzeugt Versionierungs-Artefakte (VERSION, version.json) gemäß CM-Policy
+      - name: Stamp Build Tag and Write Version (UTC)
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SHA_SHORT: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          NOTE: ${{ github.event.inputs.note }}
         run: |
+          set -e
           ts="$(date -u '+%Y-%m-%d %H:%M')"
-          sha="$(git rev-parse --short HEAD)"
-          run_id="${{ github.run_number }}"
+          sha="$(git rev-parse --short "$SHA_SHORT")"
           f="mtk-portal-upload/index.html"
-          # ersetzt den Zeitstempel hinter 'Build ' – belässt sonst alles unverändert
-          perl -0777 -pe "s/(Build\s+)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}.*/\1${ts} · #${sha} · Run ${run_id}/" -i "$f"
-          echo "Stamped Build ${ts} · #${sha} · Run ${run_id}"
+
+          # 1) Build-Tag in der HTML-Datei ersetzen (alles hinter 'Build ' neu schreiben)
+          perl -0777 -pe "s/(Build\s+)\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}.*$/\1${ts} · ${BRANCH} · #${sha} · Run ${RUN_NUMBER}/" -i "$f"
+          echo "Stamped: Build ${ts} · ${BRANCH} · #${sha} · Run ${RUN_NUMBER}"
+
+          # 2) Version ableiten (YYYY.MM.DD-RUN) – einfache, nachvollziehbare CM-Policy
+          ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
+
+          # 3) Versionierungsdateien ins Upload-Artefakt schreiben
+          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION
+
+          cat > mtk-portal-upload/version.json <<JSON
+          {
+            "version": "${ver}",
+            "time_utc": "${ts}:00",
+            "branch": "${BRANCH}",
+            "commit": "${sha}",
+            "run_id": "${RUN_ID}",
+            "run_number": ${RUN_NUMBER},
+            "note": "${NOTE}"
+          }
+          JSON
+
+          # 4) Kurz-Report in den Run-Summary schreiben (für Audits)
+          {
+            echo "## Deploy Summary"
+            echo ""
+            echo "- **Version:** ${ver}"
+            echo "- **Time (UTC):** ${ts}"
+            echo "- **Branch:** ${BRANCH}"
+            echo "- **Commit:** ${sha}"
+            echo "- **Run:** ${RUN_NUMBER}"
+            echo "- **Note:** ${NOTE}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
