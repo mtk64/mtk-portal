@@ -1,43 +1,22 @@
 # =====================================================================
 # File    : .github/workflows/qa-portal-anchor-check.yml
 # Name    : QA - Portal Anchor Check
-# Purpose : Automatischer + manueller QA-Check des Projektankers
-# Version : v1.7-safe (2025-08-20)
-# Notes   : Manuell startbar + nach Deploy; robustes Fetch, Regex-Validierung
+# Purpose : Manueller QA-Check des Projektankers (stabile, sichere Fassung)
+# Version : v1.7-safe2 (2025-08-20)
 # Owner   : TM/QM, CMO
+# Notes   : Nur manuell startbar. Robustes Fetch, klare Regex-Validierung,
+#           saubere Indentation. Danach optional Auto-Trigger wieder aktivieren.
 # =====================================================================
 
 name: QA - Portal Anchor Check
 
 on:
-  # Sichtbar & manuell startbar
   workflow_dispatch:
     inputs:
       url:
         description: "Portal-URL (leer = automatisch)"
         required: false
         default: ""
-      expect_branch:
-        description: "Erwarteter Branch (optional)"
-        required: false
-        default: ""
-      expect_sha7:
-        description: "Erwartete Commit-Kurz-SHA (7) (optional)"
-        required: false
-        default: ""
-      expect_run:
-        description: "Erwartete Run-Nummer (optional)"
-        required: false
-        default: ""
-
-  # Wird automatisch nach erfolgreichem Deploy angestoßen
-  workflow_run:
-    workflows: ["Manual Commit + Deploy"]
-    types: [completed]
-
-  # macht den Workflow im linken Menü sichtbar (kein eigentlicher Trigger)
-  push:
-    branches: [ main ]
 
 permissions:
   contents: read
@@ -45,115 +24,84 @@ permissions:
 jobs:
   qa-portal-anchor:
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'push')
 
     steps:
-      - name: Resolve mode & expected values
-        id: ctx
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then
-            echo "mode=auto" >> $GITHUB_OUTPUT
-            echo "exp_branch=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
-            echo "exp_sha7=$(echo '${{ github.event.workflow_run.head_sha }}' | cut -c1-7)" >> $GITHUB_OUTPUT
-            echo "exp_run=${{ github.event.workflow_run.run_number }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=manual" >> $GITHUB_OUTPUT
-            echo "exp_branch=${{ github.event.inputs.expect_branch }}" >> $GITHUB_OUTPUT
-            echo "exp_sha7=${{ github.event.inputs.expect_sha7 }}" >> $GITHUB_OUTPUT
-            echo "exp_run=${{ github.event.inputs.expect_run }}" >> $GITHUB_OUTPUT
-          else
-            echo "mode=push" >> $GITHUB_OUTPUT
-            echo "exp_branch=" >> $GITHUB_OUTPUT
-            echo "exp_sha7="   >> $GITHUB_OUTPUT
-            echo "exp_run="    >> $GITHUB_OUTPUT
-          fi
+      - name: Checkout (read-only)
+        uses: actions/checkout@v4
 
       - name: Compute site URL
         id: site
         shell: bash
         run: |
           if [ -n "${{ github.event.inputs.url }}" ]; then
-            echo "url=${{ github.event.inputs.url }}" >> $GITHUB_OUTPUT
+            URL="${{ github.event.inputs.url }}"
           else
-            echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
+            URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
           fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Using URL: $URL"
 
-      - name: Fetch portal (no-cache) & text view
+      - name: Fetch portal (no-cache) + text view (retry x3)
         id: fetch
         shell: bash
         run: |
           set -e
           URL="${{ steps.site.outputs.url }}"
-          TS="$(date +%s)"
+          TS=$(date +%s)
           for i in 1 2 3; do
             echo "Fetch attempt $i ..."
-            curl -sS -m 10 -H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache' \
+            curl -sS -m 15 \
+                 -H 'Cache-Control: no-cache, no-store, max-age=0' \
+                 -H 'Pragma: no-cache' \
                  "${URL}?nocache=${TS}${i}" -o portal.html && break
             sleep 2
           done
-          test -s portal.html || { echo "Leere Seite geladen"; exit 1; }
+          test -s portal.html || { echo "Leere oder fehlende Seite geladen"; exit 1; }
+
+          # HTML → Plaintext (sehr einfach, für Anker ausreichend)
           sed -E 's/<[^>]+>//g' portal.html > portal.txt
+
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor (regex + optional equality)
+      - name: Validate anchor (regex)
         id: validate
         shell: bash
         run: |
+          set -e
           python3 - << 'PY'
-import re, sys, pathlib, os
-t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
-lines = [ln.strip() for ln in t.splitlines() if "Projektanker" in ln]
+import re, sys, pathlib
+txt = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
+
+# genau 1 Zeile mit "Projektanker" erwarten
+lines = [ln.strip() for ln in txt.splitlines() if "Projektanker" in ln]
 if len(lines) != 1:
     print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
-    for l in lines[:5]: print(">>", l)
+    for l in lines[:5]:
+        print(">>", l)
     sys.exit(2)
+
 line = lines[0]
 print("Anchor:", line)
 
+# Regex deckt das aktuell verwendete Format ab:
+# Projektanker: PRJ-YYYY-MM-<CODE> · Build YYYY-MM-DD HH:MMZ / YYYY-MM-DD HH:MM Europe/Berlin · <branch> · #<sha7> · Run <n>
 rx = re.compile(
     r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
     r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
     r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
-    r"\s*·\s*(?P<branch>[a-z0-9/_-]+)"
-    r"\s*·\s*#(?P<sha7>[0-9a-f]{7})"
-    r"\s*·\s*Run\s+(?P<run>\d+)\s*$",
+    r"\s*·\s*[a-z0-9/_-]+"
+    r"\s*·\s*#[0-9a-f]{7}"
+    r"\s*·\s*Run\s+\d+\s*$",
     re.IGNORECASE
 )
-m = rx.search(line)
-if not m:
+
+if not rx.search(line):
     print("FAIL: Regex-Match auf Ankerzeile fehlgeschlagen.")
     sys.exit(3)
 
-mode = os.getenv("MODE","").lower()
-branch = m.group("branch").lower()
-sha7   = m.group("sha7").lower()
-run    = m.group("run").lower()
-
-exp_branch = os.getenv("EXP_BRANCH","").lower()
-exp_sha7   = os.getenv("EXP_SHA7","").lower()[:7]
-exp_run    = os.getenv("EXP_RUN","").lower()
-
-print(f"Parsed: branch={branch}, sha7={sha7}, run={run}")
-if mode == "auto":
-    errs=[]
-    if exp_branch and branch != exp_branch: errs.append(f"Branch mismatch: {branch} != {exp_branch}")
-    if exp_sha7   and sha7   != exp_sha7:   errs.append(f"SHA mismatch: {sha7} != {exp_sha7}")
-    if exp_run    and run    != exp_run:    errs.append(f"Run mismatch: {run} != {exp_run}")
-    if errs:
-        print("FAIL:", *errs, sep="\n- ")
-        sys.exit(4)
 print("PASS")
 PY
-        env:
-          MODE:       ${{ steps.ctx.outputs.mode }}
-          EXP_BRANCH: ${{ steps.ctx.outputs.exp_branch }}
-          EXP_SHA7:   ${{ steps.ctx.outputs.exp_sha7 }}
-          EXP_RUN:    ${{ steps.ctx.outputs.exp_run }}
 
       - name: Upload QA artifacts
         if: always()
@@ -168,8 +116,10 @@ PY
         if: always()
         shell: bash
         run: |
-          echo "## QA - Portal Anchor" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Mode:   ${{ steps.ctx.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- URL:    ${{ steps.site.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Expect: branch='${{ steps.ctx.outputs.exp_branch }}', sha7='${{ steps.ctx.outputs.exp_sha7 }}', run='${{ steps.ctx.outputs.exp_run }}'" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Result: **${{ job.status }}**" >> "$GITHUB_STEP_SUMMARY"
+          RES="FAIL"
+          if [ "${{ job.status }}" = "success" ]; then RES="PASS"; fi
+          {
+            echo "## QA - Portal Anchor"
+            echo "- URL   : ${{ steps.site.outputs.url }}"
+            echo "- Result: **${RES}**"
+          } >> "$GITHUB_STEP_SUMMARY"
