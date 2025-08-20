@@ -1,0 +1,49 @@
+name: OPS – Mark Stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit/Tag/Branch, der als stabil markiert werden soll
+        required: true
+        default: main
+      tag_name:
+        description: Name des Stable-Tags
+        required: true
+        default: qa-anchor-stable
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 0
+
+      - name: Ensure PAT present
+        run: |
+          if [ -z "${{ secrets.GH_PAT }}" ]; then
+            echo "Secret GH_PAT fehlt. Bitte unter Repo → Settings → Secrets → Actions anlegen." >&2
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create/Move annotated tag via PAT
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          set -e
+          REF=$(git rev-parse HEAD)
+          TAG="${{ github.event.inputs.tag_name }}"
+          git tag -fa "$TAG" "$REF" -m "Stable tag -> $REF"
+          git push "https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}" -f "refs/tags/$TAG"
+          echo "Moved '$TAG' to $REF"
