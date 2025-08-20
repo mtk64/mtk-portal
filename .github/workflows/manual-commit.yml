@@ -1,19 +1,19 @@
 # =====================================================================
-# File : .github/workflows/manual-commit.yml
-# Name : Manual Commit + Deploy
+# File    : .github/workflows/manual-commit.yml
+# Name    : Manual Commit + Deploy
 # ---------------------------------------------------------------------
 # Change History
-# - v1.0  (2025-08-18)  Initial workflow
-# - v1.1  (2025-08-18)  Build-Timestamp (UTC) stempeln + einfache Verifikation
-# - v1.2  (2025-08-18)  Build-Info erweitert (Branch, Commit, Run)
-# - v1.3  (2025-08-18)  Zeitstempel: UTC + Europe/Berlin; strenge Verifikation
-# - v1.4  (2025-08-18)  Regex robuster; Verifikation angepasst
-# - v1.4.1(2025-08-18)  Debug vor/nach Stempel; tokenbasierte Verifikation
-# - v1.5  (2025-08-18)  Perl-frei (sed); Verify als eigener Step (continue-on-error)
-# - v1.6  (2025-08-18)  Fehlertolerant; ausführliches Logging
-# - v1.7  (2025-08-18)  Robuste Datei-Erkennung + Ersetzen ODER Einfügen; stabile Verify
-# - v1.8  (2025-08-18)  Vor Deploy ALLE alten Build-Fragmente entfernen und
-#                      GENAU EINE neue Anker-Zeile einfügen (UTC/Berlin · branch · #sha · Run)
+# - v1.0   (2025-08-18)  Initial workflow
+# - v1.1   (2025-08-18)  Build-Timestamp (UTC) stempeln + einfache Verifikation
+# - v1.2   (2025-08-18)  Build-Info erweitert (Branch, Commit, Run)
+# - v1.3   (2025-08-18)  Zeitstempel: UTC + Europe/Berlin; strenge Verifikation
+# - v1.4   (2025-08-18)  Regex robuster; Verifikation angepasst
+# - v1.4.1 (2025-08-18)  Debug vor/nach Stempel; tokenbasierte Verifikation
+# - v1.5   (2025-08-18)  Perl-frei (sed); Verify als eigener Step (continue-on-error)
+# - v1.6   (2025-08-18)  Fehlertolerant; ausführliches Logging
+# - v1.7   (2025-08-18)  Robuste Datei-Erkennung + Ersetzen ODER Einfügen; stabile Verify
+# - v1.8   (2025-08-18)  Vor Deploy ALLE alten Build-Fragmente entfernen + exakt 1 Anker-Zeile
+# - v1.9   (2025-08-18)  Site-URL im Summary, QA-Outputs, optionales Fail-Gate bei Verify
 # =====================================================================
 
 name: Manual Commit + Deploy
@@ -22,15 +22,20 @@ on:
   workflow_dispatch:
     inputs:
       note:
-        description: "Kurznotiz fürs Protokoll"
+        description: 'Kurznotiz fürs Protokoll'
         required: false
-        default: "Manual deploy"
+        default: 'Manual deploy'
+      fail_on_verify:
+        description: 'Bei Verify-Fehler Deployment fehlschlagen (true/false)'
+        required: false
+        default: 'false'
 
 permissions:
   contents: write
   pages: write
   id-token: write
 
+# keine parallelen Pages-Deploys
 concurrency:
   group: "pages"
   cancel-in-progress: true
@@ -42,14 +47,30 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
 
+    # Outputs für QA-/Folge-Workflows
+    outputs:
+      site_url: ${{ steps.site.outputs.url }}
+      branch:   ${{ steps.ctx.outputs.branch }}
+      sha7:     ${{ steps.ctx.outputs.sha7 }}
+      run:      ${{ steps.ctx.outputs.run }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Optionaler Auto-Commit, falls zuvor Dateien im Repo geändert wurden
-      - name: Auto-commit (optional)
+      - name: Resolve context
+        id: ctx
+        shell: bash
         run: |
-          git config --global user.name "MTK-AutoCommit"
+          echo "branch=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          echo "sha7=${GITHUB_SHA::7}"     >> $GITHUB_OUTPUT
+          echo "run=${GITHUB_RUN_NUMBER}"  >> $GITHUB_OUTPUT
+
+      # Optional: alles committen, falls Dateien geändert/hochgeladen wurden
+      - name: Auto-commit (optional)
+        shell: bash
+        run: |
+          git config --global user.name  "MTK-AutoCommit"
           git config --global user.email "mtk-bot@example.com"
           git add -A
           git commit -m "Automated commit via workflow" || echo "No changes to commit"
@@ -58,92 +79,56 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      # Datei-Erkennung für das Portal-Einstiegssnippet
-      - name: Locate portal index.html
-        id: locate
+      # Site-URL für Summary/Verify
+      - name: Compute site URL
+        id: site
+        shell: bash
         run: |
-          set -e
-          cand1="mtk-portal-upload/index.html"
-          cand2="index.html"
-          if [ -f "$cand1" ]; then
-            echo "file=$cand1" >> $GITHUB_OUTPUT
-            echo "Using $cand1"
-          elif [ -f "$cand2" ]; then
-            echo "file=$cand2" >> $GITHUB_OUTPUT
-            echo "Using $cand2"
+          echo "url=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
+
+      # Stempelt/aktualisiert den Projektanker in mtk-portal-upload/index.html
+      - name: Stamp build anchor (UTC/Berlin · branch · #sha · Run)
+        id: stamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="mtk-portal-upload/index.html"
+          test -f "$FILE" || { echo "FEHLT: $FILE"; exit 1; }
+
+          UTC_TS="$(date -u '+%Y-%m-%d %H:%MZ')"
+          BERLIN_TS="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
+          BRANCH="${{ steps.ctx.outputs.branch }}"
+          SHA7="${{ steps.ctx.outputs.sha7 }}"
+          RUN="${{ steps.ctx.outputs.run }}"
+
+          NEW_LINE="Projektanker: PRJ-2025-08-WEBPORTAL-LIGHT · Build ${UTC_TS} / ${BERLIN_TS} Europe/Berlin · ${BRANCH} · #${SHA7} · Run ${RUN}"
+
+          echo "— Vorbereitet: ${NEW_LINE}"
+
+          # 1) Alte Ankerzeilen vollständig entfernen
+          TMP="$(mktemp)"
+          grep -v -E '^ *Projektanker:' "$FILE" > "$TMP" || true
+          mv "$TMP" "$FILE"
+
+          # 2) Wenn bereits eine Projektanker-Zeile existierte, ersetze sie; sonst füge am Ende des Haupt-Containers ein
+          if grep -q -E '^ *Projektanker:' "$FILE"; then
+            # (Fallback – sollte nach Entfernen nicht greifen)
+            sed -E -i "s|^ *Projektanker:.*$|${NEW_LINE}|" "$FILE"
           else
-            echo "Kein index.html gefunden (mtk-portal-upload/ oder Repo-Root)."
-            exit 1
+            # Versuche, die Zeile vor </div> des ersten großen Containers zu platzieren; sonst hinten anhängen
+            if grep -n -m1 '</div>' "$FILE" >/dev/null 2>&1; then
+              LINE_NO="$(grep -n -m1 '</div>' "$FILE" | cut -d: -f1)"
+              awk -v n="$LINE_NO" -v ins="$NEW_LINE" 'NR==n{print ins} {print}' "$FILE" > "$TMP"
+              mv "$TMP" "$FILE"
+            else
+              printf "\n<p class=\"muted\">%s</p>\n" "$NEW_LINE" >> "$FILE"
+            fi
           fi
 
-      - name: Show current Build line (before)
-        run: |
-          f="${{ steps.locate.outputs.file }}"
-          echo "--- BEFORE (erste Zeile mit 'Projektanker' oder 'Build '):"
-          grep -n "Projektanker\|Build " -m 2 "$f" || echo "n/a"
+          echo "— Nach Stempel:"
+          grep -n -E '^ *Projektanker:' "$FILE" || { echo "Kein Projektanker nach Stempel gefunden"; exit 1; }
 
-      # v1.8: Cleanup alter Fragmente + genau eine neue Anker-Zeile einfügen
-      - name: Stamp Build Tag (clean + insert once) and Write Version
-        id: stamp
-        env:
-          BRANCH: ${{ github.ref_name }}
-          SHA_FULL: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_NUMBER: ${{ github.run_number }}
-          NOTE: ${{ github.event.inputs.note }}
-        run: |
-          # bewusst ohne 'set -e' → tolerant + gut loggend
-          f="${{ steps.locate.outputs.file }}"
-          ts_utc="$(date -u '+%Y-%m-%d %H:%M')Z"
-          ts_berlin="$(TZ=Europe/Berlin date '+%Y-%m-%d %H:%M')"
-          shortsha="${SHA_FULL:0:7}"
-          anchor="Build ${ts_utc} / ${ts_berlin} Europe/Berlin · ${BRANCH} · #${shortsha} · Run ${RUN_NUMBER}"
-
-          # 1) ALLE vorhandenen Build-Fragmente im Anker-Absatz entfernen
-          sed -E -i 's/·[[:space:]]*Build[^<\r\n]*/ /g' "$f" 2>/dev/null || true
-          sed -E -i 's/\bBuild[^<\r\n]*/ /g'           "$f" 2>/dev/null || true
-          # doppelte Trennpunkte/Spaces aufräumen
-          sed -E -i 's/[[:space:]]+/ /g; s/·[[:space:]]*·/·/g; s/[[:space:]]·[[:space:]]/ · /g' "$f" 2>/dev/null || true
-
-          # 2) Neue Build-Info genau einmal vor </p> in der muted-Zeile einfügen
-          awk -v ins=" · ${anchor}" '
-            BEGIN{done=0}
-            /<p[[:space:]]+class="muted">/ && done==0 {
-              sub(/[[:space:]]*<\/p>/, ins"</p>")
-              done=1
-            }
-            {print}
-          ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-
-          echo "AFTER (erste Zeile mit 'Projektanker' oder 'Build '):"
-          grep -n "Projektanker\|Build " -m 2 "$f" || echo "n/a"
-
-          # CM-Versionierung (Artefakt)
-          ver="$(date -u '+%Y.%m.%d')-${RUN_NUMBER}"
-          mkdir -p mtk-portal-upload 2>/dev/null || true
-          printf "%s\n" "${ver}" > mtk-portal-upload/VERSION 2>/dev/null || true
-          cat > mtk-portal-upload/version.json <<JSON
-          {
-            "version": "${ver}",
-            "time_utc": "$(date -u '+%Y-%m-%dT%H:%M:00Z')",
-            "time_europe_berlin": "${ts_berlin}",
-            "branch": "${BRANCH}",
-            "commit": "${shortsha}",
-            "run_id": "${RUN_ID}",
-            "run_number": ${RUN_NUMBER},
-            "note": "${NOTE}"
-          }
-          JSON
-
-          {
-            echo "## Deploy Summary"
-            echo "- **Stamped:** ${anchor}"
-            echo "- **Version:** ${ver}"
-            echo "- **Branch:** ${BRANCH}"
-            echo "- **Commit:** ${shortsha}"
-            echo "- **Run:** ${RUN_NUMBER}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
+      # Artefakt hochladen (Pages)
       - name: Upload artifact (mtk-portal-upload)
         uses: actions/upload-pages-artifact@v3
         with:
@@ -152,3 +137,54 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deploy
         uses: actions/deploy-pages@v4
+
+      # Verifikation der gerenderten Seite (nicht-blockierend)
+      - name: Verify (anchor on live site)
+        id: verify
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -e
+          URL="${{ steps.site.outputs.url }}"
+          BUSTER="$(date +%s)"
+          echo "Verify URL: ${URL}"
+          curl -sS -m 20 -H 'Cache-Control: no-cache, no-store, max-age=0' -H 'Pragma: no-cache' \
+               "${URL}?nocache=${BUSTER}" -o portal.html
+
+          test -s portal.html || { echo "Leere Seite"; exit 1; }
+          # HTML -> Text (grob)
+          sed -E 's/<[^>]+>/ /g' portal.html | tr -s ' ' ' ' > portal.txt
+
+          echo "--- Lines with 'Projektanker' ---"
+          grep -n "Projektanker" portal.txt || true
+
+          # Regex auf komplette Ankerzeile
+          # Projektanker: PRJ-YYYY-MM-... · Build YYYY-MM-DD HH:MMZ / YYYY-MM-DD HH:MM Europe/Berlin · branch · #sha7 · Run N
+          if grep -E -q \
+            "Projektanker: *PRJ-[0-9]{4}-[0-9]{2}-[A-Z0-9-]+ *· *Build *[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}Z */ *[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} Europe/Berlin *· *[a-z0-9/_-]+ *· *#[0-9a-f]{7} *· *Run *[0-9]+" portal.txt; then
+            echo "VERIFY OK"
+            exit 0
+          else
+            echo "VERIFY FAILED: Muster nicht gefunden/matcht nicht"
+            exit 2
+          fi
+
+      # Optionales Fail-Gate (nur wenn gewünscht)
+      - name: Gate on verify (optional)
+        if: ${{ inputs.fail_on_verify == 'true' && steps.verify.outcome != 'success' }}
+        shell: bash
+        run: |
+          echo "Verify fehlgeschlagen und fail_on_verify=true -> Abbruch"
+          exit 1
+
+      # Deploy-Summary (für Menschen + QA)
+      - name: Deployment Summary
+        shell: bash
+        run: |
+          echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: ${{ steps.site.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Branch: ${{ steps.ctx.outputs.branch }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: ${{ steps.ctx.outputs.sha7 }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Run: ${{ steps.ctx.outputs.run }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Note: ${{ inputs.note }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Verify: ${{ steps.verify.outcome }}" >> "$GITHUB_STEP_SUMMARY"
