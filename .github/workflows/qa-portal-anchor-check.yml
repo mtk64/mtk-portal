@@ -1,16 +1,18 @@
 # =====================================================================
 # File    : .github/workflows/qa-portal-anchor-check.yml
 # Name    : QA - Portal Anchor Check
-# Purpose : Manueller QA-Check des Projektankers (stabile, sichere Fassung)
-# Version : v1.7-safe2 (2025-08-20)
+# Purpose : Automatischer + manueller QA-Check des Projektankers
+# Version : v1.5-safe (2025-08-18)
+# Notes   : Manuell startbar + auf push; robustes Fetch, Regex-Validierung
 # Owner   : TM/QM, CMO
-# Notes   : Nur manuell startbar. Robustes Fetch, klare Regex-Validierung,
-#           saubere Indentation. Danach optional Auto-Trigger wieder aktivieren.
 # =====================================================================
 
 name: QA - Portal Anchor Check
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       url:
@@ -26,80 +28,74 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (read-only)
-        uses: actions/checkout@v4
+      - name: Resolve mode
+        id: ctx
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=manual" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=auto" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute site URL
         id: site
         shell: bash
         run: |
           if [ -n "${{ github.event.inputs.url }}" ]; then
-            URL="${{ github.event.inputs.url }}"
+            echo "url=${{ github.event.inputs.url }}" >> "$GITHUB_OUTPUT"
           else
-            URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+            repo="${GITHUB_REPOSITORY##*/}"
+            echo "url=https://${{ github.repository_owner }}.github.io/${repo}/" >> "$GITHUB_OUTPUT"
           fi
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "Using URL: $URL"
+          echo "URL=${{ steps.site.outputs.url }}"
 
-      - name: Fetch portal (no-cache) + text view (retry x3)
-        id: fetch
+      - name: Fetch portal (no-cache, retry) & extract text
         shell: bash
         run: |
           set -e
           URL="${{ steps.site.outputs.url }}"
-          TS=$(date +%s)
           for i in 1 2 3; do
             echo "Fetch attempt $i ..."
-            curl -sS -m 15 \
-                 -H 'Cache-Control: no-cache, no-store, max-age=0' \
-                 -H 'Pragma: no-cache' \
-                 "${URL}?nocache=${TS}${i}" -o portal.html && break
+            curl -sS -m 12 \
+              -H 'Cache-Control: no-cache, no-store, max-age=0' \
+              -H 'Pragma: no-cache' \
+              "${URL}?nocache=$(date +%s)$i" -o portal.html && break
             sleep 2
           done
-          test -s portal.html || { echo "Leere oder fehlende Seite geladen"; exit 1; }
-
-          # HTML → Plaintext (sehr einfach, für Anker ausreichend)
+          test -s portal.html || { echo "Leere Seite geladen"; exit 1; }
           sed -E 's/<[^>]+>//g' portal.html > portal.txt
-
           echo "--- Lines with 'Projektanker' ---"
           grep -n "Projektanker" portal.txt || true
 
-      - name: Validate anchor (regex)
+      - name: Validate anchor (regex only)
         id: validate
         shell: bash
         run: |
-          set -e
-          python3 - << 'PY'
+          python3 - <<'PY'
 import re, sys, pathlib
-txt = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
-
-# genau 1 Zeile mit "Projektanker" erwarten
-lines = [ln.strip() for ln in txt.splitlines() if "Projektanker" in ln]
+t = pathlib.Path("portal.txt").read_text(encoding="utf-8", errors="ignore")
+lines = [ln.strip() for ln in t.splitlines() if "Projektanker" in ln]
 if len(lines) != 1:
-    print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
-    for l in lines[:5]:
-        print(">>", l)
-    sys.exit(2)
-
+  print(f"FAIL: Erwartet 1 'Projektanker'-Zeile, gefunden {len(lines)}")
+  for l in lines[:5]: print(">>", l)
+  sys.exit(2)
 line = lines[0]
 print("Anchor:", line)
 
-# Regex deckt das aktuell verwendete Format ab:
-# Projektanker: PRJ-YYYY-MM-<CODE> · Build YYYY-MM-DD HH:MMZ / YYYY-MM-DD HH:MM Europe/Berlin · <branch> · #<sha7> · Run <n>
 rx = re.compile(
-    r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
-    r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
-    r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
-    r"\s*·\s*[a-z0-9/_-]+"
-    r"\s*·\s*#[0-9a-f]{7}"
-    r"\s*·\s*Run\s+\d+\s*$",
-    re.IGNORECASE
+  r"Projektanker:\s*PRJ-\d{4}-\d{2}-[A-Z0-9-]+"
+  r"\s*·\s*Build\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}Z"
+  r"\s*/\s*\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+Europe/Berlin"
+  r"\s*·\s*[a-z0-9/_-]+"
+  r"\s*·\s*#[0-9a-f]{7}"
+  r"\s*·\s*Run\s+\d+\s*$",
+  re.IGNORECASE
 )
-
 if not rx.search(line):
-    print("FAIL: Regex-Match auf Ankerzeile fehlgeschlagen.")
-    sys.exit(3)
-
+  print("FAIL: Regex-Match fehlgeschlagen.")
+  print("LINE:", line)
+  sys.exit(3)
 print("PASS")
 PY
 
@@ -116,10 +112,6 @@ PY
         if: always()
         shell: bash
         run: |
-          RES="FAIL"
-          if [ "${{ job.status }}" = "success" ]; then RES="PASS"; fi
-          {
-            echo "## QA - Portal Anchor"
-            echo "- URL   : ${{ steps.site.outputs.url }}"
-            echo "- Result: **${RES}**"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "## QA - Portal Anchor" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Mode: ${{ steps.ctx.outputs.mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL : ${{ steps.site.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
