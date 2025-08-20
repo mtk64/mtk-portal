@@ -1,0 +1,99 @@
+name: OPS – Rollback (manual, safe)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Ziel-Branch, der zurückgesetzt wird
+        required: true
+        default: main
+      stable_ref:
+        description: Tag/Commit auf den zurückgesetzt werden soll
+        required: true
+        default: qa-anchor-stable
+      confirm:
+        description: Zur Bestätigung exakt 'ROLLBACK' eingeben (ohne Anführungszeichen)
+        required: true
+        default: ""
+        type: string
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Fetch tags/refs
+        run: |
+          git fetch --tags --force --prune
+
+      - name: Show current HEAD and stable target
+        id: info
+        run: |
+          set -e
+          CURR_SHA=$(git rev-parse HEAD)
+          CURR_SHA_S=$(git rev-parse --short HEAD)
+          CURR_MSG=$(git log -1 --pretty=%s)
+
+          STABLE_REF="${{ github.event.inputs.stable_ref }}"
+          # Verifizieren, dass die Referenz existiert
+          if ! git rev-parse --verify -q "$STABLE_REF" >/dev/null; then
+            echo "FEHLER: Referenz '$STABLE_REF' existiert nicht (Tag/Commit/Branch prüfen)." >&2
+            exit 1
+          fi
+          STABLE_SHA=$(git rev-parse "$STABLE_REF")
+          STABLE_SHA_S=$(git rev-parse --short "$STABLE_REF")
+          STABLE_MSG=$(git log -1 --pretty=%s "$STABLE_REF")
+
+          echo "Aktueller Branch:        ${{ github.event.inputs.target_branch }}"
+          echo "Aktueller HEAD:          $CURR_SHA_S  $CURR_MSG"
+          echo "Rollback-Ziel (ref):     $STABLE_REF"
+          echo "Rollback-Ziel (commit):  $STABLE_SHA_S  $STABLE_MSG"
+          echo
+          echo "Änderungsübersicht (diffstat HEAD → $STABLE_REF):"
+          git --no-pager diff --stat "$STABLE_REF"...HEAD || true
+          echo
+          echo "Hinweis: Um den Rollback wirklich auszuführen,"
+          echo "muss das Input-Feld 'confirm' exakt 'ROLLBACK' enthalten."
+
+          # Outputs für spätere Schritte
+          echo "curr_sha=$CURR_SHA" >> $GITHUB_OUTPUT
+          echo "stable_sha=$STABLE_SHA" >> $GITHUB_OUTPUT
+
+      - name: Abort if not explicitly confirmed
+        if: ${{ github.event.inputs.confirm != 'ROLLBACK' }}
+        run: |
+          echo "Abbruch: Bestätigung fehlt oder falsch."
+          echo "Bitte Workflow erneut starten und im Feld 'confirm' exakt ROLLBACK eingeben."
+          exit 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Reset branch to stable ref (no push yet)
+        run: |
+          git reset --hard "${{ github.event.inputs.stable_ref }}"
+          echo "Lokaler Reset durchgeführt."
+
+      - name: Push rollback (force-with-lease)
+        env:
+          TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -e
+          # Force-with-lease ist sicherer als plain --force
+          git push "https://x-access-token:${TOKEN}@github.com/${{ github.repository }}" \
+            HEAD:${{ github.event.inputs.target_branch }} --force-with-lease
+          echo "Rollback gepusht."
+
+      - name: Show new HEAD after rollback
+        run: |
+          NEW_SHA_S=$(git rev-parse --short HEAD)
+          NEW_MSG=$(git log -1 --pretty=%s)
+          echo "Neuer HEAD: $NEW_SHA_S  $NEW_MSG"
