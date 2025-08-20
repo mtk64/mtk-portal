@@ -1,0 +1,18 @@
+name: OPS – Token Check
+on:
+  workflow_dispatch:
+
+jobs:
+  token-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Who am I?
+        run: |
+          curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/user
+      - name: Repo access check
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}
